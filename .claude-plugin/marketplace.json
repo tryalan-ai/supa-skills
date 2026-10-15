@@ -17,6 +17,7 @@
     { "name": "review-pr",       "source": "./review-pr" },
     { "name": "task-to-pr",      "source": "./task-to-pr" },
     { "name": "test-feature",    "source": "./test-feature" },
-    { "name": "work-summary",    "source": "./work-summary" }
+    { "name": "work-summary",    "source": "./work-summary" },
+    { "name": "reflections",     "source": "./reflections" }
   ]
 }

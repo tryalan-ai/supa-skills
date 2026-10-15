@@ -1,0 +1,7 @@
+{
+  "name": "reflections",
+  "description": "Analyze local CLI agent session logs and turn recurring failure and stop patterns into prompt, tooling, setup, and environment suggestions that raise the autonomous loop rate.",
+  "version": "0.1.0",
+  "author": { "name": "Supatest AI" },
+  "license": "MIT"
+}
