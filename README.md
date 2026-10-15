@@ -22,6 +22,7 @@ Then install the skills you want:
 /plugin install agent-browser
 /plugin install automate-e2e-tests
 /plugin install agent-readiness
+/plugin install reflections
 ```
 
 Skills are installed globally and available across all your projects.
@@ -49,6 +50,7 @@ Claude Code checks for updates automatically at every startup — no action need
 | **agent-browser** | `/agent-browser [browser-task]` | Use the Agent Browser CLI for browser automation, screenshots, recordings, scraping, auth, and UI verification. |
 | **automate-e2e-tests** | `/automate-e2e-tests [feature-or-report]` | Create or update durable E2E regression tests after feature implementation and validation. |
 | **agent-readiness** | `/agent-readiness` | Evaluate codebase readiness for autonomous AI agent work. Scored report across 11 dimensions. |
+| **reflections** | `/reflections` | Analyze local CLI agent session logs and turn recurring failure and stop patterns into prompt, tooling, setup, and environment suggestions. |
 
 ## Contributing
 
