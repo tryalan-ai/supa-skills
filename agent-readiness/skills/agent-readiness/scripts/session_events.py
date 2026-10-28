@@ -131,7 +131,7 @@ def extract_text_parts(value: Any) -> list[str]:
     if not isinstance(value, dict):
         return []
 
-    if get_string(value.get("type")) in {"tool_use", "tool_result", "function_call", "function_call_output"}:
+    if get_string(value.get("type")) in {"tool_use", "tool_result", "function_call", "function_call_output", "thinking", "redacted_thinking", "reasoning", "think"}:
         return []
 
     parts: list[str] = []
@@ -143,9 +143,6 @@ def extract_text_parts(value: Any) -> list[str]:
         "message",
         "delta",
         "deltaContent",
-        "reasoningText",
-        "thinking",
-        "think",
         "finalText",
         "last_agent_message",
         "result",
@@ -160,7 +157,6 @@ def extract_text_parts(value: Any) -> list[str]:
         ("data", "content"),
         ("data", "message"),
         ("data", "deltaContent"),
-        ("data", "reasoningText"),
         ("part", "text"),
     ):
         parts.extend(extract_text_parts(get_value(value, path)))

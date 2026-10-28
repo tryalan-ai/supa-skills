@@ -49,7 +49,7 @@ Claude Code checks for updates automatically at every startup — no action need
 | **test-feature** | `/test-feature [description]` | Interactively test a feature across web, mobile, desktop, or API surfaces and produce an evidence-backed HTML validation report. |
 | **agent-browser** | `/agent-browser [browser-task]` | Use the Agent Browser CLI for browser automation, screenshots, recordings, scraping, auth, and UI verification. |
 | **automate-e2e-tests** | `/automate-e2e-tests [feature-or-report]` | Create or update durable E2E regression tests after feature implementation and validation. |
-| **agent-readiness** | `/agent-readiness` | Evaluate codebase readiness for autonomous AI agent work. Scored report across 11 dimensions. |
+| **agent-readiness** | `/agent-readiness` | Assess codebase and team readiness for coding agents: 66 repository criteria, behavioral analysis of real session transcripts, an expert-panel review and a self-contained HTML report. |
 | **reflections** | `/reflections` | Analyze local CLI agent session logs and turn recurring failure and stop patterns into prompt, tooling, setup, and environment suggestions. |
 
 ## Contributing

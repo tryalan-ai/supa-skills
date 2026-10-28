@@ -1,0 +1,97 @@
+{
+ "experts": [
+  {
+   "name": "The Buyer",
+   "role": "VP Engineering \u00b7 enterprise buyer lens",
+   "stance": "challenge",
+   "stanceLabel": "Pilot-worthy, not board-ready",
+   "position": "A vendor who prints the metric that got worse earns more trust than any gauge; the same-12-prompts table is the most persuasive thing here.",
+   "arguments": [
+    "Round 1: both critical findings partly measured the vendor's own demo setup (shared `node_modules`, launch directory). Fixed by re-running in isolated worktrees.",
+    "Round 2: side effects falling from 6/12 to 1/12 sessions is the one change large enough to trust at this sample size.",
+    "Verification falling from 7/10 to 4/8 must be explained, not hidden. It is: the new rules stopped agents from standing up their own databases."
+   ],
+   "challenge": "Which of the four fixes caused a measured change, and why did verification and session time get worse?"
+  },
+  {
+   "name": "The Auditor",
+   "role": "Measurement & methodology",
+   "stance": "challenge",
+   "stanceLabel": "Two deltas are real",
+   "position": "After two rounds and about 20 analyzer fixes, per-session outcomes mostly match the raw transcripts, but only two before/after differences clear noise at n=12.",
+   "arguments": [
+    "Recomputed 26 sessions by hand across both rounds; fixed thinking-block leakage, compound shell commands, backgrounded checks, reverts, probe misses and blind-edit artifacts (blind edits fell from 56% to about 11% once corrected).",
+    "Real: sessions with high-risk side effects 6/12 \u2192 1/12 (p\u22480.07); failed tool calls 28/232 \u2192 12/182.",
+    "Noise: verified rate, blocked share, instruction reads and the practice level move by one or two sessions; the runs also overlapped in time on one machine."
+   ],
+   "challenge": "Re-run with agents launched inside each checkout and with non-overlapping runs before claiming causation."
+  },
+  {
+   "name": "The Security Lead",
+   "role": "Security & governance",
+   "stance": "escalate",
+   "stanceLabel": "The finding a CISO needs",
+   "position": "The most important result is not in the diff: half the baseline sessions started databases, queried data, bypassed hooks or rewrote history, and agents reported only some of it.",
+   "arguments": [
+    "Baseline: `docker run` and `initdb` Postgres instances, `psql` queries against another agent's database, `git -c core.hooksPath=/dev/null commit`, `git stash` in a shared checkout.",
+    "After 17 lines of written rules, high-risk actions fell from 18 to 2 and none went unreported, but one session still applied a migration to a shared dev database.",
+    "Written rules reduce side effects; only sandboxing and a permission policy can guarantee them."
+   ],
+   "challenge": "Show me the deny-list that makes the remaining migration impossible, not just discouraged."
+  },
+  {
+   "name": "The Platform Lead",
+   "role": "Developer experience & platform",
+   "stance": "agree",
+   "stanceLabel": "Root causes are right now",
+   "position": "The highest-leverage fixes are tiny: one hyphen in `post-install`, a one-line `CLAUDE.md`, and a 'Verify a Change' block.",
+   "arguments": [
+    "`packages/prisma/package.json` declares `post-install`, which npm never runs, so every fresh checkout has no Prisma client and hundreds of unrelated type errors.",
+    "`.gitignore` excludes `CLAUDE.md` and `.claude/`, so Claude Code users cannot share instructions or skills at all.",
+    "Next step is environmental, not textual: give agents a sanctioned database so the end-to-end tests that the 'never mock' rule demands can actually run."
+   ],
+   "challenge": "Fix the gitignore and provide a disposable Postgres per agent before the next measurement."
+  }
+ ],
+ "disagreements": [
+  {
+   "topic": "Did the day-one fixes improve agent performance?",
+   "resolution": "Only partly, and the report says so. Safety and reliability improved beyond noise; verification fell within noise but for an identified reason (agents now stop instead of starting their own databases). The practice level change is shown as a range, not a win."
+  },
+  {
+   "topic": "Is 'blocked' the agent's fault or the environment's?",
+   "resolution": "Split into two findings: blocked by environment (database, generated client) and stopped for missing context (vague request). Only the first is an infrastructure gap."
+  },
+  {
+   "topic": "Do the scripted follow-up corrections measure developer behavior?",
+   "resolution": "No. The corrections finding is removed from both reports; the follow-ups were identical scripted messages."
+  },
+  {
+   "topic": "Was the CLAUDE.md fix tested?",
+   "resolution": "No. Every session was launched from outside the repository, so the file was never loaded automatically. The after report keeps the finding as 'fixed on disk, not yet observed'."
+  }
+ ],
+ "verdict": {
+  "summary": "Four repository edits, about an hour of work, changed how agents behave in a way large enough to trust: sessions with high-risk side effects fell from 6 of 12 to 1 of 12, none went unreported, and failed tool calls halved. The same rules made verification worse within noise (7 of 10 changes to 4 of 8), because agents now stop instead of quietly standing up their own databases \u2014 the correct behavior, and the signal that the next fix is a sanctioned test database per agent, not more instructions. The CLAUDE.md fix was not exercised in this run. This is evidence the method measures change; the decision it supports is a pilot on real sessions in real checkouts.",
+  "adjustments": [
+   "Re-ran both experiments in isolated worktrees after round 1 found shared dependencies contaminating results.",
+   "Fixed about 20 analyzer bugs the reviewers found; no number in this report was edited by hand.",
+   "Added side effects and disclosure as a scored dimension (15% of the operations score) after the Security Lead's escalation.",
+   "Removed the corrections finding (scripted input) and downgraded findings that rest on a single session.",
+   "Marked changes within one or two sessions as noise, and labelled the 90-day gauge as a projection."
+  ],
+  "confidence": "Medium",
+  "confidenceReason": "Two deltas clear noise at n=12 (side effects, tool failures); the rest move by one or two sessions."
+ },
+ "report": {
+  "verdict": "Four small repo fixes cut risky agent side effects from 6 sessions in 12 to 1. Verification slipped, for a reason we can fix next.",
+  "lede": "Same 12 requests, same models, fresh worktrees. High-risk actions fell from 18 to 2 and none went unreported; failed tool calls halved. Agents now stop instead of starting their own databases, so database-backed work went unverified \u2014 the next fix is a sanctioned test database per agent.",
+  "compareBanner": "Not causal yet: every session in both runs was launched from outside the repository (so the new `CLAUDE.md` was never loaded automatically), and the runs overlapped on one memory-constrained machine. Read the two changes that clear noise \u2014 side effects and tool failures \u2014 as the result.",
+  "dropFindings": [
+   "corrections"
+  ],
+  "severity": {
+   "env-blockers": "medium"
+  }
+ }
+}
