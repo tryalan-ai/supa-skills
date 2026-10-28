@@ -17,19 +17,27 @@ from repo_scan import LEVEL_MEANING, LEVEL_NAMES, PILLARS
 SHORT_PILLAR = {"context": "Context", "navigability": "Navigability", "environment": "Environment", "verification": "Testing", "guardrails": "Guardrails", "ci": "CI/CD", "observability": "Observability", "safety": "Security", "specs": "Specs", "tooling": "Tooling"}
 SEV_LABEL = {"critical": "Critical", "high": "High", "medium": "Medium", "low": "Low"}
 HORIZON = {"30": "Days 0–30", "60": "Days 31–60", "90": "Days 61–90"}
-PALETTE = ["#4f46e5", "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#64748b", "#14b8a6"]
+PALETTE = ["--chart-1", "--chart-2", "--chart-3", "--chart-4", "--chart-5", "--chart-muted"]
 ARCHETYPE_COLOR = {
-    "Verified delivery": "#10b981",
-    "Delivered (reported in chat)": "#34d399",
-    "Verified nothing needed changing": "#6ee7b7",
-    "Unverified change": "#f59e0b",
-    "Blocked by environment or missing context": "#ef4444",
-    "Stuck in failure loops": "#dc2626",
-    "Exploration / Q&A": "#0ea5e9",
-    "Ops & environment work": "#8b5cf6",
-    "Scheduled automation": "#6366f1",
-    "Conversation only": "#94a3b8",
+    "Verified delivery": "--success",
+    "Delivered (reported in chat)": "--success",
+    "Verified nothing needed changing": "--chart-3",
+    "Unverified change": "--warning",
+    "Blocked by environment or missing context": "--danger",
+    "Stuck in failure loops": "--danger",
+    "Exploration / Q&A": "--info",
+    "Ops & environment work": "--merged",
+    "Scheduled automation": "--chart-muted",
+    "Conversation only": "--chart-muted",
 }
+ALAN_MARK = '<svg viewBox="0 0 11 12" width="14" height="16" fill="currentColor" aria-hidden="true"><rect x="0" y="3" width="3" height="9" rx="1.5"/><rect x="4" y="0" width="3" height="6" rx="1.5"/><rect x="8" y="3" width="3" height="9" rx="1.5"/></svg>'
+
+
+def tone(token: str, alpha: float | None = None) -> str:
+    """CSS colour for a design token such as --chart-1 or --success."""
+    return f"hsl(var({token}) / {alpha})" if alpha is not None else f"hsl(var({token}))"
+
+
 
 
 PATH_PREFIXES: list[re.Pattern[str]] = []
@@ -57,7 +65,7 @@ def md_code(text: str) -> str:
     return "".join(f"<code>{p}</code>" if i % 2 else p for i, p in enumerate(parts))
 
 
-def gauge(value: int | None, label: str, sub: str, color: str) -> str:
+def gauge(value: int | None, label: str, sub: str, color: str, dashed: bool = False) -> str:
     if value is None:
         return f'<div class="gauge"><div class="gauge-na">n/a</div><div class="gauge-label">{e(label)}</div><div class="gauge-sub">{e(sub)}</div></div>'
     frac = max(0, min(5, value)) / 5
@@ -72,9 +80,10 @@ def gauge(value: int | None, label: str, sub: str, color: str) -> str:
     xv, yv = pt(frac)
     large_bg = 1
     large_v = 1 if sweep * frac > math.pi else 0
-    arc_v = f'<path d="M{x0:.1f},{y0:.1f} A{r},{r} 0 {large_v} 1 {xv:.1f},{yv:.1f}" stroke="{color}" stroke-width="12" fill="none" stroke-linecap="round"/>' if frac > 0 else ""
+    dash = ' opacity="0.45"' if dashed else ""
+    arc_v = f'<path d="M{x0:.1f},{y0:.1f} A{r},{r} 0 {large_v} 1 {xv:.1f},{yv:.1f}" style="stroke:{color}" stroke-width="10" fill="none" stroke-linecap="round"{dash}/>' if frac > 0 else ""
     return f'''<div class="gauge"><svg viewBox="0 0 128 112" width="150" height="132" role="img" aria-label="{e(label)} level {value}">
-<path d="M{x0:.1f},{y0:.1f} A{r},{r} 0 {large_bg} 1 {x1:.1f},{y1:.1f}" stroke="var(--track)" stroke-width="12" fill="none" stroke-linecap="round"/>{arc_v}
+<path d="M{x0:.1f},{y0:.1f} A{r},{r} 0 {large_bg} 1 {x1:.1f},{y1:.1f}" style="stroke:hsl(var(--accent))" stroke-width="10" fill="none" stroke-linecap="round"/>{arc_v}
 <text x="64" y="62" text-anchor="middle" class="gauge-num">L{value}</text>
 <text x="64" y="82" text-anchor="middle" class="gauge-name">{e(LEVEL_NAMES.get(value, "Not ready"))}</text></svg>
 <div class="gauge-label">{e(label)}</div><div class="gauge-sub">{e(sub)}</div></div>'''
@@ -87,7 +96,7 @@ def hbars(rows: list[tuple[str, float, str]], unit: str = "", max_value: float |
     items = []
     for label, value, color in rows:
         width = max(1.5, 100 * value / top)
-        items.append(f'<div class="hbar"><div class="hbar-label">{e(label)}</div><div class="hbar-track"><div class="hbar-fill" style="width:{width:.1f}%;background:{color}"></div></div><div class="hbar-val">{e(fmt(value))}{e(unit)}</div></div>')
+        items.append(f'<div class="hbar"><div class="hbar-label">{e(label)}</div><div class="hbar-track"><div class="hbar-fill" style="width:{width:.1f}%;background:{tone(color, 0.4)};box-shadow:inset 0 0 0 1.5px {tone(color)}"></div></div><div class="hbar-val">{e(fmt(value))}{e(unit)}</div></div>')
     return '<div class="hbars">' + "".join(items) + "</div>"
 
 
@@ -104,9 +113,9 @@ def donut(rows: list[tuple[str, float, str]], center: str, sub: str) -> str:
     segs = []
     for _, value, color in rows:
         length = c * value / total
-        segs.append(f'<circle r="{r}" cx="60" cy="60" fill="none" stroke="{color}" stroke-width="16" stroke-dasharray="{length:.2f} {c - length:.2f}" stroke-dashoffset="{-offset:.2f}" transform="rotate(-90 60 60)"/>')
+        segs.append(f'<circle r="{r}" cx="60" cy="60" fill="none" style="stroke:{tone(color)}" stroke-width="12" stroke-dasharray="{max(0.0, length - 1.5):.2f} {c - max(0.0, length - 1.5):.2f}" stroke-dashoffset="{-offset:.2f}" transform="rotate(-90 60 60)"/>')
         offset += length
-    legend = "".join(f'<li><span class="dot" style="background:{color}"></span>{e(label)}<b>{e(fmt(value))}</b></li>' for label, value, color in rows)
+    legend = "".join(f'<li><span class="dot" style="background:{tone(color)}"></span>{e(label)}<b>{e(fmt(value))}</b></li>' for label, value, color in rows)
     return f'<div class="donut"><svg viewBox="0 0 120 120" width="150" height="150">{"".join(segs)}<text x="60" y="58" text-anchor="middle" class="donut-num">{e(center)}</text><text x="60" y="74" text-anchor="middle" class="donut-sub">{e(sub)}</text></svg><ul class="legend">{legend}</ul></div>'
 
 
@@ -118,17 +127,17 @@ def radar(pillars: dict) -> str:
         a = -math.pi / 2 + 2 * math.pi * i / n
         return cx + r * value * math.cos(a), cy + r * value * math.sin(a)
     rings = "".join(
-        f'<polygon points="{" ".join(f"{point(i, f)[0]:.1f},{point(i, f)[1]:.1f}" for i in range(n))}" fill="none" stroke="var(--grid)"/>'
+        f'<polygon points="{" ".join(f"{point(i, f)[0]:.1f},{point(i, f)[1]:.1f}" for i in range(n))}" fill="none" style="stroke:hsl(var(--border))"/>'
         for f in (0.25, 0.5, 0.75, 1)
     )
-    spokes = "".join(f'<line x1="{cx}" y1="{cy}" x2="{point(i, 1)[0]:.1f}" y2="{point(i, 1)[1]:.1f}" stroke="var(--grid)"/>' for i in range(n))
+    spokes = "".join(f'<line x1="{cx}" y1="{cy}" x2="{point(i, 1)[0]:.1f}" y2="{point(i, 1)[1]:.1f}" style="stroke:hsl(var(--border))"/>' for i in range(n))
     shape = " ".join(f"{point(i, pillars[k]['score'] / 100)[0]:.1f},{point(i, pillars[k]['score'] / 100)[1]:.1f}" for i, k in enumerate(keys))
     labels = []
     for i, k in enumerate(keys):
         x, y = point(i, 1.2)
         anchor = "middle" if abs(x - cx) < 20 else ("start" if x > cx else "end")
         labels.append(f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="{anchor}" class="radar-label">{e(SHORT_PILLAR.get(k, k))} <tspan font-weight="700">{pillars[k]["score"]}</tspan></text>')
-    return f'<svg viewBox="-30 0 400 300" class="radar" role="img" aria-label="Pillar scores">{rings}{spokes}<polygon points="{shape}" fill="rgba(79,70,229,.18)" stroke="#4f46e5" stroke-width="2"/>{"".join(labels)}</svg>'
+    return f'<svg viewBox="-30 0 400 300" class="radar" role="img" aria-label="Pillar scores">{rings}{spokes}<polygon points="{shape}" style="fill:hsl(var(--chart-1) / .25);stroke:hsl(var(--chart-1))" stroke-width="2" stroke-linejoin="round"/>{"".join(labels)}</svg>'
 
 
 def ladder(scan: dict) -> str:
@@ -223,7 +232,7 @@ def panel_section(panel: dict | None) -> str:
     if not panel:
         return '<p class="muted">Run the expert panel step (see SKILL.md) to add an adversarial review of these findings.</p>'
     experts = "".join(
-        f'''<div class="expert"><div class="ex-head"><div class="avatar" style="background:{PALETTE[i % len(PALETTE)]}">{e(p.get("name", "?")[:1])}</div><div><b>{e(p.get("name"))}</b><span>{e(p.get("role"))}</span></div><span class="stance {e(p.get("stance", "agree"))}">{e(p.get("stanceLabel") or p.get("stance", ""))}</span></div>
+        f'''<div class="expert"><div class="ex-head"><div class="avatar">{e(re.sub(r"^The\s+", "", p.get("name", "?"))[:1])}</div><div><b>{e(p.get("name"))}</b><span>{e(p.get("role"))}</span></div><span class="stance {e(p.get("stance", "agree"))}">{e(p.get("stanceLabel") or p.get("stance", ""))}</span></div>
 <p class="ex-take">“{md_code(p.get("position", ""))}”</p>
 <ul>{"".join(f"<li>{md_code(x)}</li>" for x in p.get("arguments", []))}</ul>
 {f'<p class="ex-challenge"><b>Challenge:</b> {md_code(p["challenge"])}</p>' if p.get("challenge") else ""}</div>'''
@@ -264,8 +273,8 @@ def risk_card(agg: dict) -> str:
     return f'''<div class="card risk"><h3>What agents did beyond the diff <span class="n">n={agg.get("toolSessionCount", 0)} sessions</span></h3>
 <p class="muted small">Side effects a code reviewer never sees: writes outside the workspace, shared dependency changes, databases and containers, history rewrites, direct data access. "Disclosed" means the agent's final report mentioned it.</p>
 <div class="stats">{stat(f'{risks["sessionsWithRisk"]}/{agg.get("toolSessionCount", 0)}', "sessions with at least one side effect", "bad" if risks["sessionShare"] >= 30 else "warn")}{stat(str(risks["total"]), f"high-risk actions (+{risks.get('lowRisk', 0)} scratch writes)")}{stat(str(risks["undisclosed"]), "high-risk actions not mentioned in the final report", "bad" if risks["undisclosed"] else "good")}</div>
-<div class="fgrid"><div><table class="mini"><thead><tr><th>Action</th><th class=num>Count</th><th class=num>Undisclosed</th></tr></thead><tbody>{by_kind}</tbody></table></div>
-<div class="tablewrap flat"><table class="mini"><thead><tr><th>Request</th><th>Action</th><th>Command</th><th>Reported?</th></tr></thead><tbody>{rows}</tbody></table></div></div></div>'''
+<table class="mini"><thead><tr><th>Action</th><th class=num>Count</th><th class=num>Not reported</th></tr></thead><tbody>{by_kind}</tbody></table>
+<h4>High-risk actions</h4><div class="tablewrap flat"><table class="mini events"><thead><tr><th>Request</th><th>Action</th><th>What the agent ran</th><th>Reported?</th></tr></thead><tbody>{rows}</tbody></table></div></div>'''
 
 
 def model_table(agg: dict) -> str:
@@ -276,7 +285,7 @@ def model_table(agg: dict) -> str:
         f'<tr><td>{e(r["model"].replace("claude-", ""))}</td><td class=num>{r["sessions"]}</td><td class=num>{"—" if r["verified"] is None else str(round(r["verified"])) + "%"}</td><td class=num>{round(r["blocked"])}%</td><td class=num>{r["medianCalls"]:.0f}</td><td class=num>{round(r["failureRate"])}%</td><td class=num>{r["riskEvents"]}</td></tr>'
         for r in rows
     )
-    return f'<table class="mini"><thead><tr><th>Model</th><th class=num>Sessions</th><th class=num>Verified</th><th class=num>Blocked</th><th class=num>Median calls</th><th class=num>Failed calls</th><th class=num>Side effects</th></tr></thead><tbody>{body}</tbody></table>'
+    return f'<table class="mini models"><thead><tr><th>Model</th><th class=num>Sessions</th><th class=num>Verified</th><th class=num>Blocked</th><th class=num>Median calls</th><th class=num>Failed calls</th><th class=num>Side effects</th></tr></thead><tbody>{body}</tbody></table>'
 
 
 COMPARE_METRICS: list[tuple[str, str, bool, str]] = [
@@ -457,10 +466,10 @@ def session_table(sessions: list[dict]) -> str:
     for s in sorted(sessions, key=lambda x: (not x["has_tool_data"], x["archetype"])):
         if not s["has_tool_data"] and not s["user_prompts"]:
             continue
-        color = ARCHETYPE_COLOR.get(s.get("archetypeLabel", ""), "#94a3b8")
+        color = ARCHETYPE_COLOR.get(s.get("archetypeLabel", ""), "--chart-muted")
         rows.append(
             f'<tr><td class="prompt">{e(s["first_prompt"][:150] or s["title"][:150])}</td><td>{e((s["model"] or s["provider"]).replace("claude-", ""))}</td>'
-            f'<td><span class="pill" style="border-color:{color};color:{color}">{e(s.get("archetypeLabel", s["archetype"]))}</span></td>'
+            f'<td><span class="pill"><span class="dot" style="background:{tone(color)}"></span>{e(s.get("archetypeLabel", s["archetype"]))}</span></td>'
             f'<td class="num">{s["tool_calls"] if s["has_tool_data"] else "—"}</td><td>{e(s["verification_depth"] if s["has_tool_data"] else "—")}</td>'
             f'<td class="num">{s["failed_calls"] if s["has_tool_data"] else "—"}</td><td class="num">{s["corrections"]}</td><td class="num">{e(s["duration_min"] if s["duration_min"] is not None else "—")}</td></tr>'
         )
@@ -492,17 +501,17 @@ def render(data: dict) -> str:
         for f in top3
     )
     arche = agg.get("archetypes", {})
-    arche_rows = [(k, v, ARCHETYPE_COLOR.get(k, "#94a3b8")) for k, v in arche.items()]
+    arche_rows = [(k, v, ARCHETYPE_COLOR.get(k, "--chart-muted")) for k, v in arche.items()]
     tool_mix = agg.get("toolMix", {})
     mix_labels = {"read": "Read files", "search": "Search", "index": "Code index", "edit": "Edit", "validate": "Test / lint / build", "shell": "Other shell", "mcp": "MCP tools", "delegate": "Sub-agents", "plan": "Planning", "web": "Web", "skill": "Skills", "deliver": "Commit / PR", "other": "Other"}
     mix_rows = [(mix_labels.get(k, k), v, PALETTE[i % len(PALETTE)]) for i, (k, v) in enumerate(tool_mix.items())]
-    fail_rows = [(k["label"], k["count"], "#ef4444") for k in agg.get("failures", {}).get("kinds", [])][:8]
+    fail_rows = [(k["label"], k["count"], "--danger") for k in agg.get("failures", {}).get("kinds", [])][:8]
     depth = {}
     for s in sessions:
         if s["has_tool_data"] and s["category_counts"].get("edit"):
             depth[s["verification_depth"]] = depth.get(s["verification_depth"], 0) + 1
     depth_names = {"e2e": "End-to-end tests", "test": "Unit/integration tests", "typecheck": "Type check", "build": "Build", "lint": "Lint only", "none": "Nothing"}
-    depth_colors = {"e2e": "#059669", "test": "#10b981", "typecheck": "#34d399", "build": "#6ee7b7", "lint": "#f59e0b", "none": "#ef4444"}
+    depth_colors = {"e2e": "--chart-3", "test": "--success", "typecheck": "--chart-1", "build": "--chart-5", "lint": "--warning", "none": "--danger"}
     depth_rows = [(depth_names[k], depth[k], depth_colors[k]) for k in ("e2e", "test", "typecheck", "build", "lint", "none") if depth.get(k)]
     origins = agg.get("humans", {}).get("promptOrigins", {})
     origin_names = {"direct": "Typed by a developer", "chat_relay": "Relayed from Slack/Teams", "workflow": "Workflow / orchestrator", "scheduled": "Scheduled automation", "continuation": "Continuation / resume", "interrupt": "Interrupt"}
@@ -545,13 +554,13 @@ def render(data: dict) -> str:
 
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Agent Readiness Assessment — {e(org)}</title><style>{CSS}</style></head><body>
-<header class="top"><div class="brand"><span class="logo">A</span><div><b>Agent Readiness Assessment</b><span>{e(org)} · {e(data["generatedAt"])}</span></div></div><span class="conf">Confidential · generated locally, no code left this machine</span></header>
+<header class="top"><div class="brand"><span class="logo">{ALAN_MARK}</span><div><b>Agent Readiness Assessment</b><span>{e(org)} · {e(data["generatedAt"])}</span></div></div><span class="conf">Confidential · generated locally, no code left this machine</span></header>
 <nav class="toc"><a href="#summary">Summary</a>{'<a href="#change">Measured change</a>' if data.get("baseline") else ''}<a href="#ladder">Readiness ladder</a><a href="#behavior">How agents work</a><a href="#findings">Findings</a>{'<a href="#panel">Expert panel</a>' if data.get("panel") else ''}<a href="#roadmap">Roadmap</a><a href="#proof">30-day plan</a><a href="#scorecard">Scorecard</a><a href="#sessions">Sessions</a><a href="#method">Method</a></nav>
 <main>
 <section id="summary" class="hero">
 <div class="hero-left"><p class="eyebrow">Executive summary</p><h1>{verdict}</h1><p class="lede">{e(data.get("lede") or LEVEL_MEANING.get(practice if practice is not None else paper, ""))}</p>
 {f'<p class="confidence-line">{md_code(data["caveats"][0])}</p>' if data.get("caveats") else ""}<div class="stats">{stat(str(len(data["repos"])), "repositories scanned")}{stat(f"{agg.get('sessionCount', 0):,}", "agent sessions analyzed")}{stat(f"{agg.get('toolCalls', 0):,}", "tool calls inspected")}{stat(str(len(models) or len(agg.get('providers', {}))), "models / harnesses")}</div></div>
-<div class="hero-right">{gauge(paper, "On paper", f"Repository score {scan['score']}/100", "#4f46e5")}{gauge(practice, "In practice", practice_sub(data), "#f59e0b")}<div class="projected">{gauge(proj_final["level"] if proj_final else None, "Projected", f"if the 90-day plan lands · repo {proj_final['score'] if proj_final else 'n/a'}/100", "#10b981")}</div></div>
+<div class="hero-right">{gauge(paper, "On paper", f"Repository score {scan['score']}/100", tone("--foreground"))}{gauge(practice, "In practice", practice_sub(data), tone("--warning") if practice is not None and practice < paper else tone("--success"))}<div class="projected">{gauge(proj_final["level"] if proj_final else None, "Projected", f"if the 90-day plan lands · repo {proj_final['score'] if proj_final else 'n/a'}/100", tone("--muted-foreground"), dashed=True)}</div></div>
 </section>
 <section class="topfindings"><h2>The three things to fix first</h2><div class="topgrid">{top_cards}</div></section>
 {cost_html}
@@ -580,68 +589,137 @@ def render(data: dict) -> str:
 {f'<section id="panel"><h2>Expert panel review</h2><p class="sub">Independent reviewers recomputed the numbers from raw transcripts and challenged every finding, in two rounds, before this report was finalized.</p>{panel_section(panel)}</section>' if panel else ''}
 <section id="roadmap"><h2>90-day roadmap</h2><p class="sub">Sequenced so each phase unblocks the next. Repository levels are recomputed from the criteria each phase fixes.</p>{roadmap(findings, proj)}</section>
 <section id="proof">{proof_plan(data)}</section>
-<section id="scorecard"><h2>Repository scorecard · {e(scan["name"])}</h2><p class="sub">{scan["stats"]["sourceFiles"]:,} source files · {scan["stats"]["testFiles"]:,} test files · {", ".join(f"{k} {v:,}" for k, v in scan["stats"]["languages"].items())}</p>{scorecard(scan)}</section>
+<section id="scorecard"><h2>Repository scorecard · {e(org)}</h2><p class="sub">{scan["stats"]["sourceFiles"]:,} source files · {scan["stats"]["testFiles"]:,} test files · {", ".join(f"{k} {v:,}" for k, v in scan["stats"]["languages"].items())}</p>{scorecard(scan)}</section>
 <section id="sessions"><h2>Session explorer</h2>{session_table(sessions)}</section>
 <section id="method"><h2>Methodology</h2><div class="grid2"><div class="card"><h3>Data sources</h3><ul>{method_sources}<li>Harnesses: {e(provider_list)}</li><li>Repository: {e(scan["path"])}</li></ul>
 <h3>Privacy</h3><p>Everything runs locally. Transcripts are parsed on this machine; excerpts are redacted for keys, tokens and passwords, and capped at 220 characters.</p></div>
 <div class="card"><h3>How scores work</h3><ul><li><b>On paper</b>: repository level from {len(scan["criteria"])} pass/fail criteria with file-level evidence; 80% gating per level.</li><li><b>In practice</b>: agent operations score from verified delivery (25%), unblocked sessions (15%), safe operation — sessions without high-risk side effects (15%), tool reliability (15%), request quality (15%), grounded edits (5%) and low rework (10%), mapped to the same five levels.</li><li><b>Verified</b> means a test, type check or build passed after the session's final edit. Lint alone does not count.</li></ul>
 {f"<h3>Caveats</h3><ul>{caveats}</ul>" if caveats else ""}</div></div></section>
-</main><footer>Generated by the agent-readiness skill · {e(data["generatedAt"])}</footer>
+</main><footer>{ALAN_MARK}<span>Generated by Alan · agent-readiness · {e(data["generatedAt"])}</span></footer>
 <script type="application/json" id="report-data">{html.escape(json.dumps({"findings": [f["id"] for f in findings]}))}</script></body></html>'''
 
 
 CSS = """
-:root{--bg:#f7f7fb;--card:#fff;--ink:#0f172a;--mute:#64748b;--line:#e5e7eb;--track:#e8e8f0;--grid:#e2e8f0;--accent:#4f46e5}
-:root{color-scheme:light dark}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b0d14;--card:#131722;--ink:#e5e7eb;--mute:#94a3b8;--line:#242a38;--track:#232838;--grid:#2a3142}}
-:root[data-theme="dark"]{--bg:#0b0d14;--card:#131722;--ink:#e5e7eb;--mute:#94a3b8;--line:#242a38;--track:#232838;--grid:#2a3142}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-code{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;background:rgba(99,102,241,.09);padding:1px 5px;border-radius:4px;word-break:break-word}
-.top{display:flex;justify-content:space-between;align-items:center;padding:14px 32px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-.brand{display:flex;gap:12px;align-items:center}.brand span{display:block;color:var(--mute);font-size:13px}.logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#4f46e5,#0ea5e9);color:#fff!important;display:grid!important;place-items:center;font-weight:800;font-size:17px!important}
-.conf{font-size:12px;color:var(--mute);border:1px solid var(--line);padding:4px 10px;border-radius:999px}
-.toc{display:flex;gap:4px;padding:8px 32px;overflow:auto;background:var(--card);border-bottom:1px solid var(--line)}.toc a{color:var(--mute);text-decoration:none;font-size:13px;padding:4px 10px;border-radius:6px;white-space:nowrap}.toc a:hover{background:var(--bg);color:var(--ink)}
-main{max-width:1180px;margin:0 auto;padding:28px 32px 60px}section{margin:0 0 44px}h2{font-size:24px;margin:0 0 6px;letter-spacing:-.01em}.sub{color:var(--mute);margin:0 0 18px}
-h3{font-size:16px;margin:0 0 12px}h4{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:14px 0 6px}
-.hero{display:grid;grid-template-columns:1.25fr 1fr;gap:28px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:30px}
-.eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:700;margin:0 0 8px}.hero h1{font-size:30px;line-height:1.2;margin:0 0 10px;letter-spacing:-.02em}.lede{color:var(--mute);margin:0 0 18px;font-size:16px}
-.hero-right{display:flex;justify-content:space-around;gap:6px}.gauge{text-align:center}.gauge-num{font-size:30px;font-weight:800;fill:var(--ink)}.gauge-name{font-size:10px;fill:var(--mute);text-transform:uppercase;letter-spacing:.08em}.gauge-label{font-weight:700;margin-top:-6px}.gauge-sub{font-size:12px;color:var(--mute)}.gauge-na{height:132px;display:grid;place-items:center;color:var(--mute);font-size:28px}
-.stats{display:flex;flex-wrap:wrap;gap:10px}.stats.col{flex-direction:column}.stat{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 14px;min-width:120px;flex:1}.stat-v{font-size:22px;font-weight:800;letter-spacing:-.02em}.stat-l{font-size:12px;color:var(--mute)}
-.stat.bad .stat-v{color:#dc2626}.stat.warn .stat-v{color:#d97706}.stat.good .stat-v{color:#059669}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.grid2>.card,.grid3>.card{margin:0}.grid2+.grid3,.grid3+.grid2,.grid2+.grid2,.grid3+.grid3{margin-top:16px}
-.topfindings{margin-top:22px}.topgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.topf{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-left:4px solid #f59e0b;border-radius:12px;padding:16px}.topf.sev-critical{border-left-color:#dc2626}.topf h4{font-size:16px;text-transform:none;letter-spacing:0;color:var(--ink);margin:8px 0 6px}.topf p{margin:0;color:var(--mute);font-size:13px}
-.badge{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:2px 8px;border-radius:999px}.badge.critical{background:#fee2e2;color:#b91c1c}.badge.high{background:#ffedd5;color:#c2410c}.badge.medium{background:#fef9c3;color:#a16207}.badge.low{background:#e0f2fe;color:#0369a1}
-.n{font-size:11px;font-weight:600;color:var(--mute);background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:1px 8px;margin-left:6px;vertical-align:middle}
-.confidence-line{font-size:12.5px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:6px 10px;margin:0 0 14px}
-.alan-line{font-size:13px;margin:0}li.ctx{color:var(--mute)}b.bad,.bad{color:#dc2626}td.good{color:#059669;font-weight:700}td.bad{color:#dc2626;font-weight:700}
-.risk{border-color:#fecaca}.tablewrap.flat{border:0;border-radius:0}
-.projected{opacity:.75;border-left:1px dashed var(--line);padding-left:10px}.projected .gauge-label::after{content:" (projection)";font-weight:400;color:var(--mute);font-size:12px}
-.callout-warn{font-size:13px;background:#fff7ed;border:1px solid #fdba74;color:#7c2d12;border-radius:10px;padding:10px 12px;margin:12px 0 0}.callout-warn.lead{margin:0 0 12px}
-.noise{font-size:11px;font-weight:500;color:var(--mute);margin-left:4px}.change{border:2px solid #10b981}.change h3{font-size:22px}.compare td{font-size:14px;padding:9px 6px}
-.cost{margin-top:16px;border-color:#fecaca}.small{font-size:12px}.muted{color:var(--mute)}
-.ladder-wrap{display:grid;grid-template-columns:1.5fr 1fr;gap:16px;align-items:start}.ladder{width:100%;border-collapse:separate;border-spacing:4px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px}
-.ladder th{font-size:12px;font-weight:700;text-align:center}.ladder th span{display:block;font-weight:500;color:var(--mute);font-size:10.5px}.ladder .rowh{text-align:left;font-size:13px;font-weight:600;white-space:nowrap;padding-right:6px}
-.cell{text-align:center;border-radius:7px;font-size:12.5px;font-weight:700;padding:8px 0;cursor:help}.cell.full{background:#10b981;color:#fff}.cell.part{background:#fde68a;color:#78350f}.cell.none{background:#fecaca;color:#7f1d1d}.cell.empty{color:var(--mute)}
-.rate{text-align:center;font-weight:800;font-size:13px}.radar{width:100%}.radar-label{font-size:10.5px;fill:var(--mute)}
-.funnel{display:flex;flex-direction:column;gap:10px}.fstep{display:grid;grid-template-columns:190px 1fr 90px;gap:10px;align-items:center}.flabel{font-size:13px}.ftrack{position:relative;height:26px;background:var(--track);border-radius:7px;overflow:hidden}.ffill{height:100%;background:linear-gradient(90deg,#4f46e5,#0ea5e9);border-radius:7px}.fval{position:absolute;left:10px;top:3px;color:#fff;font-weight:800;font-size:13px;text-shadow:0 1px 2px rgba(0,0,0,.3)}.drop{font-size:12px;color:#dc2626;font-weight:600}
-.donut{display:flex;gap:14px;align-items:center}.donut-num{font-size:20px;font-weight:800;fill:var(--ink)}.donut-sub{font-size:9px;fill:var(--mute);text-transform:uppercase;letter-spacing:.06em}.legend{list-style:none;margin:0;padding:0;font-size:12.5px;flex:1}.legend li{display:flex;align-items:center;gap:6px;padding:2px 0}.legend b{margin-left:auto}.dot{width:9px;height:9px;border-radius:3px;flex:none}
-.hbars{display:flex;flex-direction:column;gap:6px}.hbar{display:grid;grid-template-columns:140px 1fr 44px;gap:8px;align-items:center;font-size:12.5px}.hbar-track{height:12px;background:var(--track);border-radius:4px;overflow:hidden}.hbar-fill{height:100%;border-radius:4px}.hbar-val{text-align:right;font-weight:700}
-table.mini{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}table.mini td,table.mini th{border-bottom:1px solid var(--line);padding:6px 4px;text-align:left}.num{text-align:right!important;font-variant-numeric:tabular-nums}
-.finding{background:var(--card);border:1px solid var(--line);border-left:5px solid #f59e0b;border-radius:14px;padding:22px;margin-bottom:18px}.finding.sev-critical{border-left-color:#dc2626}.finding.sev-medium{border-left-color:#eab308}.finding header{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--mute)}.finding h3{font-size:20px;margin:8px 0 4px}.headline{font-size:15.5px;margin:0 0 10px}
-.fmetric{display:inline-block;font-weight:700;font-size:13px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:5px 10px}.fgrid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.fgrid ul,.fgrid ol{margin:0;padding-left:18px;font-size:13.5px}.fgrid li{margin:4px 0}
-.ev-src{display:block;color:var(--mute);font-size:12px;font-style:italic}.alan{background:linear-gradient(135deg,rgba(79,70,229,.07),rgba(14,165,233,.07));border:1px solid rgba(79,70,229,.25);border-radius:12px;padding:4px 16px 14px;margin-top:10px}.alan h4{color:var(--accent)}.alan p{margin:0 0 10px;font-size:13.5px}.chips{display:flex;gap:6px}.chips span{font-size:11.5px;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:2px 9px}
-.experts{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.expert{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}.ex-head{display:flex;gap:10px;align-items:center}.ex-head span{display:block;color:var(--mute);font-size:12px}.avatar{width:36px;height:36px;border-radius:50%;color:#fff;display:grid;place-items:center;font-weight:800}.stance{margin-left:auto;font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;background:var(--bg);border:1px solid var(--line)}.stance.challenge{color:#c2410c}.stance.agree{color:#059669}.stance.escalate{color:#b91c1c}
-.ex-take{font-size:15px;font-weight:600;margin:12px 0 6px}.expert ul{padding-left:18px;font-size:13.5px;margin:6px 0}.ex-challenge{font-size:13px;background:var(--bg);border-radius:8px;padding:8px 10px;margin:8px 0 0}
-.verdict{background:var(--card);border:2px solid var(--accent);border-radius:14px;padding:20px;margin-top:16px}.confidence{font-size:13px;color:var(--mute)}
-.lanes{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column}.lane h4{margin-top:0;color:var(--accent)}.lane ul{list-style:none;padding:0;margin:0;flex:1}.lane li{padding:8px 0;border-bottom:1px solid var(--line)}.lane li a{color:var(--ink);font-weight:600;text-decoration:none}.lane li span{display:block;font-size:12px;color:var(--mute)}.lane-proj{margin-top:12px;font-size:13px;background:rgba(16,185,129,.1);border-radius:8px;padding:8px 10px}
-details{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:8px}summary{display:grid;grid-template-columns:260px 1fr 90px;gap:14px;align-items:center;padding:12px 16px;cursor:pointer;font-weight:600}.pbar{height:8px;background:var(--track);border-radius:4px;overflow:hidden}.pbar span{display:block;height:100%;background:linear-gradient(90deg,#4f46e5,#10b981)}.pscore{text-align:right;font-size:13px;color:var(--mute)}
-table.crit{width:100%;border-collapse:collapse;font-size:13px}table.crit td{border-top:1px solid var(--line);padding:9px 12px;vertical-align:top}table.crit tr.pass td:first-child{color:#059669;font-weight:800}table.crit tr.fail td:first-child{color:#dc2626;font-weight:800}table.crit tr.skip{opacity:.6}.fixline{color:#c2410c;font-size:12px;margin-top:3px}
-.tablewrap{overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:14px}table.sessions{width:100%;border-collapse:collapse;font-size:12.5px}table.sessions th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);padding:10px;border-bottom:1px solid var(--line);background:var(--bg)}table.sessions td{padding:8px 10px;border-bottom:1px solid var(--line)}td.prompt{max-width:420px}.pill{border:1px solid;border-radius:999px;padding:1px 8px;font-size:11.5px;white-space:nowrap;font-weight:600}
-.proof{background:linear-gradient(135deg,#1e1b4b,#0c4a6e);color:#e0e7ff;border-radius:18px;padding:28px}.proof h3{font-size:24px;color:#fff;margin:0 0 6px}.proof .muted{color:#c7d2fe}.proof .eyebrow{color:#7dd3fc}
-.weeks{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:18px 0}.wk{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:14px}.wk b{color:#7dd3fc}.wk p{margin:6px 0 0;font-size:13.5px}
-.proof-table{background:rgba(255,255,255,.06);border-radius:12px;overflow:hidden}.proof-table td,.proof-table th{border-bottom:1px solid rgba(255,255,255,.12)!important;padding:9px 12px!important;color:#e0e7ff}.proof-table th{color:#a5b4fc;font-size:11px;text-transform:uppercase;letter-spacing:.05em}.target{color:#6ee7b7}
-footer{text-align:center;color:var(--mute);font-size:12px;padding:20px}
-@media (max-width:900px){.hero,.grid2,.grid3,.topgrid,.lanes,.weeks,.experts,.fgrid,.ladder-wrap{grid-template-columns:1fr}.hero-right{flex-wrap:wrap}main{padding:18px}}
-@media print{.top,.toc{position:static}details{break-inside:avoid}details>table{display:table}.finding,.card{break-inside:avoid}body{background:#fff}}
+:root{color-scheme:light dark;
+--background:0 0% 100%;--foreground:0 0% 4%;--card:0 0% 96.078%;--muted:0 0% 96.078%;--muted-foreground:0 0% 40%;--accent:0 0% 92.157%;--border:0 0% 90%;--primary:0 0% 9%;--primary-foreground:0 0% 98%;--ring:0 0% 45%;
+--tone-red:3 41% 49%;--tone-amber:38 100% 31%;--tone-green:151 74% 30%;--tone-blue:213 55% 48%;--tone-purple:257 36% 54%;--tone-pink:329 37% 48%;
+--danger:var(--tone-red);--success:var(--tone-green);--warning:var(--tone-amber);--info:var(--tone-blue);--merged:var(--tone-purple);--link:var(--tone-blue);
+--chart-1:213 68% 50%;--chart-2:17 70% 50%;--chart-3:159 73% 36%;--chart-4:44 100% 36%;--chart-5:338 61% 58%;--chart-muted:45 3% 52%;
+--hover:rgb(0 0 0 / .06);--shadow-sm:0 1px 2px rgb(0 0 0 / .04);--shadow-md:0 6px 18px rgb(0 0 0 / .08);
+--font-sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--background:0 0% 6.5%;--foreground:0 0% 98%;--card:0 0% 9%;--muted:0 0% 9%;--muted-foreground:0 0% 55%;--accent:0 0% 11.765%;--border:0 0% 13%;--primary:0 0% 98%;--primary-foreground:0 0% 9%;--ring:0 0% 62%;
+--tone-red:4 59% 67%;--tone-amber:36 55% 53%;--tone-green:143 36% 54%;--tone-blue:214 70% 66%;--tone-purple:255 55% 72%;--tone-pink:331 49% 67%;
+--chart-1:215 89% 66%;--chart-2:16 85% 65%;--chart-3:153 51% 52%;--chart-4:40 77% 61%;--chart-5:332 72% 70%;--hover:rgb(255 255 255 / .08)}}
+:root[data-theme="dark"]{--background:0 0% 6.5%;--foreground:0 0% 98%;--card:0 0% 9%;--muted:0 0% 9%;--muted-foreground:0 0% 55%;--accent:0 0% 11.765%;--border:0 0% 13%;--primary:0 0% 98%;--primary-foreground:0 0% 9%;--ring:0 0% 62%;
+--tone-red:4 59% 67%;--tone-amber:36 55% 53%;--tone-green:143 36% 54%;--tone-blue:214 70% 66%;--tone-purple:255 55% 72%;--tone-pink:331 49% 67%;
+--chart-1:215 89% 66%;--chart-2:16 85% 65%;--chart-3:153 51% 52%;--chart-4:40 77% 61%;--chart-5:332 72% 70%;--hover:rgb(255 255 255 / .08)}
+*{box-sizing:border-box}
+html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body{margin:0;background:hsl(var(--background));color:hsl(var(--foreground));font:15px/1.5 var(--font-sans);letter-spacing:-.006em}
+a{color:hsl(var(--link));text-decoration:none}a:hover{text-decoration:underline}
+code{font:12.5px/1.5 var(--font-mono);letter-spacing:0;background:hsl(var(--accent));padding:1px 5px;border-radius:4px;word-break:break-word}
+h1,h2,h3,h4{font-weight:600;margin:0}
+h2{font-size:21.5px;line-height:1.28;letter-spacing:-.014em;margin:0 0 4px}
+h3{font-size:15px;line-height:1.5;margin:0 0 12px}
+h4{font-size:11px;line-height:1.45;letter-spacing:.025em;text-transform:uppercase;font-weight:500;color:hsl(var(--muted-foreground));margin:16px 0 6px}
+.muted{color:hsl(var(--muted-foreground))}.small{font-size:12.5px}
+.eyebrow{font-size:11px;line-height:1.45;letter-spacing:.025em;text-transform:uppercase;font-weight:500;color:hsl(var(--muted-foreground));margin:0 0 8px}
+.sub{color:hsl(var(--muted-foreground));margin:0 0 16px;font-size:15px}
+/* chrome */
+.top{position:sticky;top:0;z-index:5;display:flex;justify-content:space-between;align-items:center;gap:16px;padding:10px 24px;background:hsl(var(--background) / .92);backdrop-filter:saturate(180%) blur(12px);border-bottom:1px solid hsl(var(--border))}
+.brand{display:flex;gap:10px;align-items:center;font-size:12.5px}.brand b{font-size:15px;font-weight:600}.brand span{display:block;color:hsl(var(--muted-foreground))}
+.logo svg{width:12px;height:13px}.logo{width:28px;height:28px;border-radius:8px;background:hsl(var(--primary));color:hsl(var(--primary-foreground));display:grid;place-items:center;flex:none}
+.conf{font-size:12.5px;color:hsl(var(--muted-foreground));background:hsl(var(--muted));padding:4px 12px;border-radius:9999px}
+.toc{display:flex;gap:2px;padding:6px 20px;overflow:auto;border-bottom:1px solid hsl(var(--border));background:hsl(var(--background))}
+.toc a{color:hsl(var(--muted-foreground));font-size:12.5px;padding:4px 10px;border-radius:8px;white-space:nowrap}.toc a:hover{background:var(--hover);color:hsl(var(--foreground));text-decoration:none}
+main{max-width:1200px;margin:0 auto;padding:32px 24px 64px}
+section{margin:0 0 48px}
+/* surfaces */
+.card,.hero,.finding,.expert,.lane,.topf,details,.tablewrap,.ladder,.verdict,.proof{background:hsl(var(--card));border-radius:24px}
+.card{padding:20px;margin-bottom:16px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.grid2>.card,.grid3>.card{margin:0}.grid2+.grid3,.grid3+.grid2,.grid2+.grid2,.grid3+.grid3{margin-top:12px}
+/* hero */
+.hero{display:grid;grid-template-columns:1.2fr 1fr;gap:32px;align-items:center;padding:32px}
+.hero h1{font-size:26px;line-height:1.2;letter-spacing:-.018em;margin:0 0 10px;text-wrap:balance}h2,h3,.topf h4{text-wrap:balance}
+.lede{color:hsl(var(--muted-foreground));margin:0 0 16px;font-size:15px}
+.hero-right{display:flex;justify-content:space-around;gap:4px}
+.gauge{text-align:center}.gauge-num{font-size:28px;font-weight:600;letter-spacing:-.02em;fill:hsl(var(--foreground))}.gauge-name{font-size:10px;letter-spacing:.06em;fill:hsl(var(--muted-foreground));text-transform:uppercase}
+.gauge-label{font-weight:600;font-size:15px;margin-top:-6px}.gauge-sub{font-size:12.5px;color:hsl(var(--muted-foreground));max-width:170px;margin:0 auto}.gauge-na{height:132px;display:grid;place-items:center;color:hsl(var(--muted-foreground));font-size:21.5px}
+.projected{border-left:1px dashed hsl(var(--border));padding-left:8px}.projected .gauge-label::after{content:" · projection";font-weight:400;color:hsl(var(--muted-foreground));font-size:12.5px}
+.confidence-line{font-size:12.5px;color:hsl(var(--warning));background:hsl(var(--warning) / .08);border-radius:12px;padding:8px 12px;margin:0 0 16px}
+/* stats */
+.stats{display:flex;flex-wrap:wrap;gap:8px}.stats.col{flex-direction:column}
+.stat{background:hsl(var(--background));border-radius:12px;padding:10px 14px;min-width:120px;flex:1}
+.stat-v{font-size:21.5px;line-height:1.28;font-weight:600;letter-spacing:-.014em;font-variant-numeric:tabular-nums}.stat-l{font-size:12.5px;color:hsl(var(--muted-foreground))}
+.stat.bad .stat-v{color:hsl(var(--danger))}.stat.warn .stat-v{color:hsl(var(--warning))}.stat.good .stat-v{color:hsl(var(--success))}
+.n{font-size:11px;font-weight:500;color:hsl(var(--muted-foreground));background:hsl(var(--background));border-radius:9999px;padding:1px 8px;margin-left:6px;vertical-align:middle;letter-spacing:0}
+/* badges */
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;padding:2px 10px;border-radius:9999px}
+.badge::before{content:"";width:6px;height:6px;border-radius:9999px;background:currentColor}
+.badge.critical{color:hsl(var(--danger));background:hsl(var(--danger) / .1)}.badge.high{color:hsl(var(--warning));background:hsl(var(--warning) / .1)}.badge.medium{color:hsl(var(--muted-foreground));background:hsl(var(--accent))}.badge.low{color:hsl(var(--info));background:hsl(var(--info) / .1)}
+/* top findings */
+.topfindings{margin-top:24px}.topfindings h2{margin-bottom:12px}.topgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.topf{display:block;color:inherit;padding:18px;transition:background .15s}.topf:hover{background:hsl(var(--accent));text-decoration:none}.topf h4{font-size:15px;text-transform:none;letter-spacing:-.006em;color:hsl(var(--foreground));font-weight:600;margin:10px 0 4px}.topf p{margin:0;color:hsl(var(--muted-foreground));font-size:12.5px}
+.cost{margin-top:12px}
+/* ladder */
+.ladder-wrap{display:grid;grid-template-columns:1.5fr 1fr;gap:12px;align-items:start}
+.ladder{width:100%;border-collapse:separate;border-spacing:4px;padding:12px}
+.ladder th{font-size:12.5px;font-weight:600;text-align:center}.ladder th span{display:block;font-weight:400;color:hsl(var(--muted-foreground));font-size:11px}.ladder .rowh{text-align:left;font-weight:500;white-space:nowrap;padding-right:8px}
+.cell{text-align:center;border-radius:8px;font:500 12.5px/1 var(--font-mono);padding:9px 0;cursor:help}
+.cell.full{background:hsl(var(--success) / .14);color:hsl(var(--success))}.cell.part{background:hsl(var(--warning) / .12);color:hsl(var(--warning))}.cell.none{background:hsl(var(--danger) / .1);color:hsl(var(--danger))}.cell.empty{color:hsl(var(--muted-foreground))}
+.rate{text-align:center;font:600 12.5px var(--font-mono);color:hsl(var(--muted-foreground))}
+.radar{width:100%}.radar-label{font-size:11px;fill:hsl(var(--muted-foreground))}
+/* funnel and bars */
+.funnel{display:flex;flex-direction:column;gap:8px}.fstep{display:grid;grid-template-columns:180px 1fr 92px;gap:10px;align-items:center}.flabel{font-size:12.5px}
+.ftrack{position:relative;height:24px;background:hsl(var(--background));border-radius:6px;overflow:hidden}.ffill{height:100%;background:hsl(var(--chart-1) / .4);box-shadow:inset 0 0 0 1.5px hsl(var(--chart-1));border-radius:6px}
+.fval{position:absolute;left:10px;top:3px;font:600 12.5px var(--font-mono)}.drop{font-size:12.5px;color:hsl(var(--danger));font-variant-numeric:tabular-nums}
+.donut{display:flex;gap:16px;align-items:center}.donut-num{font-size:21.5px;font-weight:600;fill:hsl(var(--foreground))}.donut-sub{font-size:9px;letter-spacing:.06em;fill:hsl(var(--muted-foreground));text-transform:uppercase}
+.legend{list-style:none;margin:0;padding:0;font-size:12.5px;flex:1}.legend li{display:flex;align-items:center;gap:8px;padding:2px 0}.legend b{margin-left:auto;font:500 12.5px var(--font-mono)}
+.dot{width:8px;height:8px;border-radius:9999px;flex:none;display:inline-block}
+.hbars{display:flex;flex-direction:column;gap:6px}.hbar{display:grid;grid-template-columns:140px 1fr 40px;gap:8px;align-items:center;font-size:12.5px}
+.hbar-track{height:12px;background:hsl(var(--background));border-radius:4px;overflow:hidden}.hbar-fill{height:100%;border-radius:4px}.hbar-val{text-align:right;font:500 12.5px var(--font-mono)}
+/* tables */
+table.mini{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}table.models td:first-child{white-space:nowrap}table.mini th{font-weight:400;white-space:nowrap;color:hsl(var(--muted-foreground));text-align:left;padding:6px 6px}table.mini td{border-top:1px solid hsl(var(--border));padding:7px 6px;text-align:left}
+.num{text-align:right!important;font-variant-numeric:tabular-nums}
+td.good{color:hsl(var(--success));font-weight:600}td.bad{color:hsl(var(--danger));font-weight:600}td.muted{color:hsl(var(--muted-foreground))}b.bad,.bad{color:hsl(var(--danger))}
+/* findings */
+.finding{padding:24px;margin-bottom:12px}.finding header{display:flex;gap:12px;align-items:center;font-size:12.5px;color:hsl(var(--muted-foreground))}
+.finding h3{font-size:18px;line-height:1.35;letter-spacing:-.008em;margin:10px 0 4px}.headline{font-size:15px;margin:0 0 12px}
+.fmetric{display:inline-block;font:500 12.5px var(--font-mono);background:hsl(var(--background));border-radius:8px;padding:5px 10px}
+.fgrid{display:grid;grid-template-columns:1fr 1fr;gap:24px}.fgrid ul,.fgrid ol{margin:0;padding-left:18px;font-size:14px}.fgrid li{margin:4px 0}
+.ev-src{display:block;color:hsl(var(--muted-foreground));font-size:12.5px}li.ctx{color:hsl(var(--muted-foreground))}
+.alan-line{font-size:14px;margin:0}
+/* panel */
+.experts{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.expert{padding:20px}
+.ex-head{display:flex;gap:10px;align-items:center}.ex-head b{font-weight:600}.ex-head span{display:block;color:hsl(var(--muted-foreground));font-size:12.5px}
+.avatar{width:32px;height:32px;border-radius:9999px;background:hsl(var(--primary));color:hsl(var(--primary-foreground));display:grid;place-items:center;font-weight:600;font-size:13px;flex:none}
+.stance{margin-left:auto;font-size:12px;font-weight:500;border-radius:9999px;padding:2px 10px;background:hsl(var(--accent));color:hsl(var(--muted-foreground))}.stance.challenge{color:hsl(var(--warning));background:hsl(var(--warning) / .1)}.stance.agree{color:hsl(var(--success));background:hsl(var(--success) / .1)}.stance.escalate{color:hsl(var(--danger));background:hsl(var(--danger) / .1)}
+.ex-take{font-size:15px;font-weight:600;margin:14px 0 6px}.expert ul{padding-left:18px;font-size:14px;margin:6px 0}.ex-challenge{font-size:13px;background:hsl(var(--background));border-radius:12px;padding:10px 12px;margin:10px 0 0}
+.verdict{padding:24px;margin-top:12px;box-shadow:inset 0 0 0 1px hsl(var(--foreground) / .12)}.verdict h3{font-size:18px}.confidence{font-size:12.5px;color:hsl(var(--muted-foreground))}
+/* roadmap */
+.lanes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.lane{padding:18px;display:flex;flex-direction:column}.lane h4{margin-top:0}
+.lane ul{list-style:none;padding:0;margin:0;flex:1}.lane li{padding:8px 0;border-top:1px solid hsl(var(--border))}.lane li:first-child{border-top:0}.lane li a{color:hsl(var(--foreground));font-weight:500}.lane li span{display:block;font-size:12.5px;color:hsl(var(--muted-foreground))}
+.lane-proj{margin-top:12px;font-size:12.5px;background:hsl(var(--background));border-radius:12px;padding:8px 12px}
+/* 30-day plan */
+.proof{padding:28px}.proof h3{font-size:21.5px;line-height:1.28;letter-spacing:-.014em;margin:0 0 6px}
+.weeks{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:20px 0}.wk{background:hsl(var(--background));border-radius:12px;padding:14px}.wk b{font-weight:600}.wk p{margin:6px 0 0;font-size:14px;color:hsl(var(--muted-foreground))}
+.proof-table{background:hsl(var(--background));border-radius:12px;overflow:hidden}.proof-table th,.proof-table td{padding:9px 14px!important}.target{color:hsl(var(--success))}
+/* measured change */
+.change{box-shadow:inset 0 0 0 1px hsl(var(--success) / .35)}.change h3{font-size:21.5px;letter-spacing:-.014em;margin:0 0 6px}.compare td{font-size:14px;padding:9px 6px}
+.noise{font-size:11px;font-weight:400;color:hsl(var(--muted-foreground));margin-left:4px;font-family:var(--font-sans)}
+.callout-warn{font-size:12.5px;background:hsl(var(--warning) / .08);color:hsl(var(--warning));border-radius:12px;padding:10px 14px;margin:12px 0 0}.callout-warn.lead{margin:0 0 14px}
+.events td:first-child{width:30%;color:hsl(var(--muted-foreground))}.events td:nth-child(2){width:18%}.events td:last-child{white-space:nowrap}.risk{box-shadow:inset 0 0 0 1px hsl(var(--danger) / .2)}.tablewrap.flat{background:transparent;border-radius:0}
+/* scorecard */
+details{margin-bottom:8px}summary{display:grid;grid-template-columns:260px 1fr 90px;gap:16px;align-items:center;padding:12px 18px;cursor:pointer;font-weight:500;list-style:none;border-radius:24px}summary:hover{background:var(--hover)}summary::-webkit-details-marker{display:none}
+.pbar{height:6px;background:hsl(var(--background));border-radius:9999px;overflow:hidden}.pbar span{display:block;height:100%;background:hsl(var(--foreground))}.pscore{text-align:right;font:500 12.5px var(--font-mono);color:hsl(var(--muted-foreground))}
+table.crit{width:100%;border-collapse:collapse;font-size:12.5px}table.crit td{border-top:1px solid hsl(var(--border));padding:9px 14px;vertical-align:top}
+table.crit tr.pass td:first-child{color:hsl(var(--success));font-weight:600}table.crit tr.fail td:first-child{color:hsl(var(--danger));font-weight:600}table.crit tr.skip{opacity:.55}.fixline{color:hsl(var(--warning));margin-top:3px}
+/* sessions */
+.tablewrap{overflow:auto}table.sessions{width:100%;border-collapse:collapse;font-size:12.5px}
+table.sessions th{text-align:left;font-weight:400;color:hsl(var(--muted-foreground));padding:12px 12px 8px;white-space:nowrap}table.sessions td{padding:8px 12px;border-top:1px solid hsl(var(--border))}table.sessions tbody tr:hover{background:var(--hover)}td.prompt{max-width:420px}
+.pill{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+footer{text-align:center;color:hsl(var(--muted-foreground));font-size:12.5px;padding:24px;display:flex;justify-content:center;gap:8px;align-items:center}
+@media (max-width:900px){.hero,.grid2,.grid3,.topgrid,.lanes,.weeks,.experts,.fgrid,.ladder-wrap{grid-template-columns:1fr}.hero-right{flex-wrap:wrap}main{padding:16px}summary{grid-template-columns:1fr 80px}.pbar{display:none}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+@media print{.top,.toc{position:static;backdrop-filter:none}details>table{display:table}.finding,.card,details{break-inside:avoid}}
 """

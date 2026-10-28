@@ -788,10 +788,11 @@ def risk_events(ordered: list, workspace: str, final_text: str) -> list[dict]:
         command = call.command or ""
         segments = shell_segments(command) if command else []
         for kind, label, pattern in RISK_RULES:
-            match = next((m for m in (pattern.search(seg) for seg in segments) if m), None)
+            hit = next(((seg, m) for seg in segments for m in [pattern.search(seg)] if m), None)
+            match = hit[1] if hit else None
             if match:
                 words = DISCLOSURE_WORDS.get(kind, ())
-                events.append({"kind": kind, "label": label, "command": redact(normalize_command(command), 160),
+                events.append({"kind": kind, "label": label, "command": redact(hit[0], 160),
                                "disclosed": any(w in final_lower for w in words)})
         targets: list[str] = []
         if workspace and call.category == "edit":

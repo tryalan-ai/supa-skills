@@ -195,7 +195,7 @@ def adherence(sessions: list[SessionMetrics], repo: Path) -> dict:
                 matched = head(core) in doc_heads
                 validation_calls.append({"session": s.id, "command": core[:140], "documented": matched})
             for rule in forbidden:
-                if rule in core:
+                if re.search(rf"(^|\s){re.escape(rule)}($|\s)", core):
                     violations.append({"session": s.id, "rule": f"Do not run `{rule}`", "command": core[:140]})
 
     rule_text = " ".join(open(repo / f, errors="ignore").read() for f in ("AGENTS.md", "CLAUDE.md") if (repo / f).exists()).lower()
