@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from analyze_sessions import parse_session
+from behavior import analyze_events
 from session_events import parse_session_events
 
 
@@ -41,12 +41,11 @@ class SessionEventNormalizationTest(unittest.TestCase):
         )
 
         events = parse_session_events(path, "auto")
-        stats = parse_session(path, session_format="auto")
+        stats = analyze_events(path.stem, "local", events)
 
         self.assertEqual([event.kind for event in events].count("tool_call"), 1)
         self.assertEqual(stats.tool_calls, 1)
-        self.assertEqual(stats.validation_calls, 1)
-        self.assertEqual(stats.final_report_markers, 2)
+        self.assertEqual(stats.validations, 1)
 
     def test_auto_detects_provider_and_generic_tool_events(self) -> None:
         cases = {
@@ -78,11 +77,10 @@ class SessionEventNormalizationTest(unittest.TestCase):
         for relative_path, lines in cases.items():
             with self.subTest(relative_path=relative_path):
                 path = self.write_jsonl(relative_path, lines)
-                stats = parse_session(path, session_format="auto")
+                stats = analyze_events(path.stem, "local", parse_session_events(path, "auto"))
 
                 self.assertEqual(stats.tool_calls, 1)
-                self.assertEqual(stats.validation_calls, 1)
-                self.assertGreaterEqual(stats.final_report_markers, 2)
+                self.assertEqual(stats.validations, 1)
 
     def test_codex_visible_agent_messages_are_preserved(self) -> None:
         path = self.write_jsonl(
@@ -105,7 +103,7 @@ class SessionEventNormalizationTest(unittest.TestCase):
             ],
         )
 
-    def test_multipart_agent_messages_preserve_all_text_blocks(self) -> None:
+    def test_reasoning_blocks_are_excluded_from_visible_replies(self) -> None:
         cases = {
             "copilot/session-state/abc/events.jsonl": [
                 '{"type":"assistant.message","data":{"content":"visible","reasoningText":"because"}}',
@@ -121,10 +119,7 @@ class SessionEventNormalizationTest(unittest.TestCase):
         for relative_path, lines in cases.items():
             with self.subTest(relative_path=relative_path):
                 path = self.write_jsonl(relative_path, lines)
-                self.assertEqual(len(assistant_texts(path)), 1)
-                text = assistant_texts(path)[0]
-                self.assertIn("\n", text)
-                self.assertGreaterEqual(len(text.splitlines()), 2)
+                self.assertEqual(assistant_texts(path), ["answer" if "cursor" in relative_path else "visible"])
 
     def test_provider_visible_agent_messages_are_preserved(self) -> None:
         cases = {

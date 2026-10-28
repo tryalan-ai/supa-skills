@@ -1,7 +1,9 @@
 {
   "name": "agent-readiness",
-  "description": "Evaluate how ready a codebase is for autonomous AI agent work. Produces a scored report across 11 dimensions with a maturity level and prioritized action plan.",
-  "version": "2.0.0",
-  "author": { "name": "Supatest AI" },
+  "description": "Assess how ready a codebase and its team are for autonomous coding agents: 64 repository criteria plus behavioral analysis of real agent sessions (exploration, verification, failures, side effects, instruction adherence, developer prompting), an expert-panel review, and a self-contained HTML report with a 30-day plan.",
+  "version": "3.0.0",
+  "author": {
+    "name": "Supatest AI"
+  },
   "license": "MIT"
 }
