@@ -162,6 +162,7 @@ class SessionMetrics:
     reported_blocked: bool = False
     reverted: bool = False
     checked_after_last_edit: bool = False
+    passing_check: bool = False
     in_progress: bool = False
     workspace: str = ""
     launch_cwd: str = ""
@@ -179,7 +180,7 @@ HEREDOC_BODY = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?\n\s*\1\b", re.S)
 WRAPPER_PREFIX = re.compile(r"^\s*(\(|\)|time\s+|timeout\s+(-\S+\s+)*\d+[smh]?\s+|(\w+=\S*\s+)+|env\s+(\w+=\S*\s+)*|nice\s+|stdbuf\s+\S+\s+)+")
 DIAGNOSTIC_FLAGS = re.compile(r"--(showConfig|traceResolution|listFiles|version|help|explainFiles|print-config)\b|\s-v\s*$|--dry-run")
 PROBE_HEADS = re.compile(r"^(ls|which|test|\[|pg_isready|command -v|stat|file|type|grep|rg|find|readlink|realpath|nc|curl -s?I?)\b")
-PASS_EVIDENCE = re.compile(r"\b\d+ passed\b|\bpassed\b|found 0 errors|0 errors|no (type )?errors|exit[ =:]+0\b|✓|checked \d+ files? in|all checks passed|no issues|\bok\b", re.I)
+PASS_EVIDENCE = re.compile(r"\b(tsc|exit|status|rc|code)\s*[=:]\s*0\b|\b\d+ passed\b|\bpassed\b|found 0 errors|0 errors|no (type )?errors|exit[ =:]+0\b|✓|checked \d+ files? in|all checks passed|no issues|\bok\b", re.I)
 FAIL_EVIDENCE = re.compile(r"\b[1-9]\d* (failed|failing|errors?)\b|error TS\d+|\bFAIL\b|✗|× |ERR!|Error: |found [1-9]\d* errors?|exit(ed)?( with)?( code)?[ =:]+[1-9]", re.I)
 
 
@@ -195,6 +196,9 @@ def shell_segments(command: str) -> list[str]:
     return segments
 
 
+VALIDATE_HEAD = re.compile(r"^(npx|npm|pnpm|yarn|bun|bunx|node|tsx|ts-node|vitest|jest|mocha|pytest|python3?|uv|poetry|tsc|biome|eslint|prettier|ruff|mypy|pyright|go|cargo|make|just|mvn|gradle|\./gradlew|dotnet|turbo|nx|playwright|cypress|deno|rspec|bundle|phpunit|composer|swift|xcodebuild|\./[\w./-]+|(?:[\w./-]*/)?node_modules/\.bin/[\w-]+|/[\w./-]+/bin/[\w-]+)\b")
+
+
 def segment_category(segment: str) -> str:
     if VCS_DELIVERY.search(segment):
         return "deliver"
@@ -204,7 +208,7 @@ def segment_category(segment: str) -> str:
         return "search"
     if DIAGNOSTIC_FLAGS.search(segment):
         return "shell"
-    if VALIDATION.search(segment) or VALIDATION_KINDS[1][1].search(segment):
+    if VALIDATE_HEAD.match(segment) and (VALIDATION.search(segment) or VALIDATION_KINDS[1][1].search(segment)):
         return "validate"
     return "shell"
 
@@ -227,13 +231,44 @@ def output_is_filtered(command: str) -> bool:
 
 def validation_result(command: str, output: str, failed: bool) -> str:
     """Return passed, failed or uncertain for a validation command."""
+    summary = re.findall(r"\b(\d+) (passed|failed)\b", output or "")
+    if summary:
+        return "failed" if failed or any(kind == "failed" and int(count) for count, kind in summary) else "passed"
     if failed or FAIL_EVIDENCE.search(output or ""):
         return "failed"
+    silent_checker = bool(re.search(r"\b(tsc|biome|eslint|ruff|mypy)\b", command or ""))
     if output_is_filtered(command) and not PASS_EVIDENCE.search(output or ""):
-        return "uncertain"
+        tail_only = not re.search(r"\|\s*(grep|wc|sed|awk|cut)\b|>\s*/dev/null", command or "")
+        if not (silent_checker and tail_only and not (output or "").strip()):
+            return "uncertain"
     if not (output or "").strip() and not re.search(r"\btsc\b|biome|eslint|ruff", command or ""):
         return "uncertain"
     return "passed"
+
+
+BACKGROUND = re.compile(r"(moved to the background|running in background|Output is being written to)", re.I)
+
+
+def defer(call: "ToolCall", output: str, deferred: dict[str, "ToolCall"]) -> None:
+    """Remember where a validation's real result will appear when it ran in the background or into a file."""
+    targets = re.findall(r"Output is being written to:?\s*(\S+?)\.?(?:\s|$)", output or "") if BACKGROUND.search(output or "") else []
+    targets += re.findall(r"(?<![0-9&])>\s*(/[\w./-]+\.(?:txt|log|out|output))", HEREDOC_BODY.sub("", call.command or ""))
+    for target in targets:
+        deferred[target] = call
+    if targets and call.check == "uncertain":
+        call.check = "pending"
+
+
+def resolve_deferred(reader: "ToolCall", output: str, deferred: dict[str, "ToolCall"]) -> None:
+    for target, call in list(deferred.items()):
+        if target in (reader.command or "") or Path(target).name in (reader.command or ""):
+            verdict = "failed" if FAIL_EVIDENCE.search(output or "") else "passed" if PASS_EVIDENCE.search(output or "") else ""
+            if verdict:
+                call.check = verdict
+                if verdict == "failed" and not call.failed:
+                    call.failed = True
+                    call.failure_kind = classify_failure(output)
+                del deferred[target]
 
 
 def is_probe(command: str) -> bool:
@@ -533,6 +568,7 @@ def analyze_events(
     metrics = SessionMetrics(session_id, source, provider, model_from(events), title, started, ended, duration, True)
 
     turns: list[tuple[str, str]] = []
+    deferred: dict[str, ToolCall] = {}
     calls: dict[str, ToolCall] = {}
     ordered: list[ToolCall] = []
     seen_usage: set[str] = set()
@@ -561,7 +597,16 @@ def analyze_events(
             exit_failed = bool(re.search(r"exit code [1-9]|exited with code [1-9]|Exit code: [1-9]|\"exit_code\":\s*[1-9]", text[:600]))
             if "validate" in call.categories:
                 call.check = validation_result(call.command, text, event.failed or exit_failed)
-            if event.failed or exit_failed or call.check == "failed":
+            resolve_deferred(call, text, deferred)
+            if "validate" in call.categories:
+                defer(call, text, deferred)
+            if call.category == "edit" and call.command:
+                edit_broke = bool(re.search(r"Traceback|SyntaxError|No such file|cannot open|Permission denied|string to replace not found", text))
+                event_failed = edit_broke
+                exit_failed = edit_broke
+            else:
+                event_failed = event.failed
+            if event_failed or exit_failed or (call.check == "failed" and call.category != "edit"):
                 if call.command and is_probe(call.command) and call.check != "failed":
                     call.failure_kind = "probe_miss"
                 else:
@@ -614,7 +659,7 @@ def analyze_events(
         reverted_paths = revert_targets(call.command)
         if reverted_paths is not None:
             surviving = set() if reverted_paths == ["*"] else {p for p in surviving if not any(same_file(p, r) for r in reverted_paths)}
-        if call.category == "edit" and not call.failed:
+        if (call.category == "edit" or "edit" in call.categories) and not call.failed:
             if first_edit_index is None:
                 first_edit_index = call.index
             last_edit_index = call.index
@@ -648,10 +693,11 @@ def analyze_events(
         if last_edit_index is not None and call.index >= last_edit_index and call.check == "passed":
             kinds_after.add(kind)
     metrics.validation_failures = sum(1 for c in validations if c.check == "failed")
+    metrics.passing_check = any(c.check == "passed" and kind_of(c) in STRONG_VALIDATION for c in validations)
     if last_edit_index is not None:
         metrics.validated_after_last_edit = bool(kinds_after & STRONG_VALIDATION)
         metrics.verification_depth = next((k for k in ("e2e", "test", "typecheck", "build", "lint") if k in kinds_after), "none")
-    metrics.delivered = any(c.category == "deliver" and not c.failed for c in ordered)
+    metrics.delivered = any("deliver" in c.categories and not c.failed for c in ordered)
 
     failures = [c for c in ordered if c.failed]
     metrics.failed_calls = len(failures)
@@ -708,21 +754,27 @@ def kind_of(call: ToolCall) -> str:
 
 
 RISK_RULES: list[tuple[str, str, re.Pattern[str]]] = [
-    ("history_rewrite", "Rewrote git history or discarded work", re.compile(r"\bgit (commit [^|;&]*--amend|reset --hard|push [^|;&]*(-f\b|--force)|rebase\b|clean -[a-z]*f|checkout -- |restore \.|stash(?! list| show))", re.I)),
-    ("hook_bypass", "Bypassed git hooks or checks", re.compile(r"--no-verify\b|core\.hooksPath|HUSKY=0|SKIP=\S+ git", re.I)),
-    ("infrastructure", "Started containers, databases or services", re.compile(r"\bdocker (run|compose[^|;&]* up|pull|start)\b|docker-compose up|\binitdb\b|\bpg_ctl\b|\bredis-server\b|\bsystemctl (start|restart)\b|\bkill(all)? -9\b|\bpkill\b", re.I)),
-    ("shared_state", "Mutated dependencies or generated code", re.compile(r"\b(npm (install|i|ci|uninstall)|pnpm (install|add|remove)|yarn (add|install)|pip install|uv (pip|add)|poetry add|prisma generate|prisma:generate|prisma (db push|migrate (reset|dev))|go get|cargo add)\b", re.I)),
-    ("data_access", "Queried a database directly", re.compile(r"\b(psql|mysql|mongosh?|redis-cli|sqlite3)\b", re.I)),
-    ("secrets", "Read secrets or environment files", re.compile(r"(cat|less|head|tail|grep)[^|;&]*\.env(\.local|\.production)?\b(?!\.example)|\bprintenv\b|\benv\s*\|\s*grep", re.I)),
-    ("network", "Fetched from the network", re.compile(r"\b(curl|wget)\s+https?://|\bnpm (view|info)\b|\bgit clone\b", re.I)),
+    ("history_rewrite", "Rewrote git history or discarded work", re.compile(r"^git (commit [^|;&]*--amend|reset --hard|push [^|;&]*(-f\b|--force)|rebase\b|clean -[a-z]*f|checkout -- \.|restore \.|stash(?!\s+(list|show|pop|apply)))", re.I)),
+    ("discard_own", "Discarded its own uncommitted edits", re.compile(r"^git (checkout -- (?!\.)|restore (?!\.))", re.I)),
+    ("hook_bypass", "Bypassed git hooks or checks", re.compile(r"--no-verify\b|core\.hooksPath|^HUSKY=0|^SKIP=\S+ git", re.I)),
+    ("infrastructure", "Started containers, databases or services", re.compile(r"^(docker (run|compose[^|;&]* up|pull|start)\b|docker-compose up|(\S*/)?initdb\b|(\S*/)?pg_ctl\b.*\bstart|(\S*/)?postgres -D|(\S*/)?redis-server\b|systemctl (start|restart)\b)", re.I)),
+    ("process_control", "Stopped processes", re.compile(r"^(pkill|killall|kill)\b", re.I)),
+    ("shared_state", "Installed or changed dependencies", re.compile(r"^(npm (install|i|ci|uninstall)\b|pnpm (install|add|remove)\b|yarn (add|install)\b|pip install\b|uv (pip|add)\b|poetry add\b|go get\b|cargo add\b)", re.I)),
+    ("data_access", "Queried or changed a database directly", re.compile(r"^(\S*/)?(psql|mysql|mongosh?|redis-cli|sqlite3)\b|^(npx )?prisma (db (push|execute|seed)|migrate (deploy|dev|reset))\b|^npm run prisma:(migrate|seed)", re.I)),
+    ("secrets", "Read secrets or environment files", re.compile(r"^(cat|less|head|tail|grep|source|\.)\b[^|;&]*\.env(\.local|\.production|\.development)?(?=$|[\s'\"])|^printenv\b|^env$", re.I)),
+    ("codegen", "Regenerated code in the workspace", re.compile(r"^(npx )?prisma generate\b|prisma:generate|graphql-codegen|buf generate", re.I)),
+    ("network", "Fetched from the network", re.compile(r"^(curl|wget)\s+https?://|^npm (view|info)\b|^git clone\b", re.I)),
 ]
 
 
 DISCLOSURE_WORDS: dict[str, tuple[str, ...]] = {
     "infrastructure": ("docker", "container", "postgres", "database", "initdb", "pg_ctl", "redis", "server"),
-    "history_rewrite": ("amend", "stash", "reset", "rebase", "force"),
-    "shared_state": ("install", "generate", "prisma client", "generated"),
-    "data_access": ("psql", "queried", "query", "database"),
+    "history_rewrite": ("amend", "stash", "reset --hard", "rebase", "force-push", "force push"),
+    "shared_state": ("install", "dependenc"),
+    "codegen": ("generate", "prisma client", "generated"),
+    "discard_own": ("revert", "discard", "restored"),
+    "process_control": ("stopped", "killed", "kill"),
+    "data_access": ("psql", "queried", "applied the migration", "migrate deploy", "ran migrations", "against the database", "against a real", "dev database"),
     "secrets": (".env", "secret", "environment variable"),
     "hook_bypass": ("hook", "no-verify", "hookspath"),
     "network": ("curl", "fetched", "download"),
@@ -734,10 +786,11 @@ def risk_events(ordered: list, workspace: str, final_text: str) -> list[dict]:
     final_lower = final_text.lower()
     for call in ordered:
         command = call.command or ""
+        segments = shell_segments(command) if command else []
         for kind, label, pattern in RISK_RULES:
-            match = pattern.search(command)
+            match = next((m for m in (pattern.search(seg) for seg in segments) if m), None)
             if match:
-                words = DISCLOSURE_WORDS.get(kind, ()) + (match.group(0).split()[0].lower(),)
+                words = DISCLOSURE_WORDS.get(kind, ())
                 events.append({"kind": kind, "label": label, "command": redact(normalize_command(command), 160),
                                "disclosed": any(w in final_lower for w in words)})
         targets: list[str] = []
@@ -780,7 +833,7 @@ def infer_workspace(events: list[NormalizedSessionEvent], ordered: list, roots: 
 
 REPO_ROOTS: set[str] = set()
 MATCH_ROOTS: set[str] = set()
-LOW_RISK = {"scratch", "network"}
+LOW_RISK = {"scratch", "network", "codegen", "discard_own", "process_control"}
 
 
 def first_error_line(output: str) -> str:
@@ -793,6 +846,7 @@ def first_error_line(output: str) -> str:
 ARCHETYPES: dict[str, str] = {
     "verified_delivery": "Verified delivery",
     "reported_delivery": "Delivered (reported in chat)",
+    "no_change_needed": "Verified nothing needed changing",
     "unverified_change": "Unverified change",
     "struggling": "Stuck in failure loops",
     "blocked": "Blocked by environment or missing context",
@@ -813,8 +867,12 @@ def classify(m: SessionMetrics) -> str:
             return "struggling"
         return "conversation" if m.user_prompts <= 1 and not m.claimed_done else "exploration"
     edits = 0 if m.reverted else m.category_counts.get("edit", 0)
-    if m.reported_blocked and not (edits and m.validated_after_last_edit):
+    if not edits and m.passing_check and m.reported_blocked and re.search(r"reproduce|no (type )?errors|exits? 0|passes|clean", " ".join(e.get("text", "") for e in m.excerpts if e.get("kind") == "blocked"), re.I):
+        return "no_change_needed"
+    if m.reported_blocked and not edits:
         return "blocked"
+    if edits and m.validated_after_last_edit:
+        return "verified_delivery"
     if m.loops and (m.failed_calls >= max(4, m.tool_calls * 0.25) or m.ended_on_failure):
         return "struggling"
     if edits:

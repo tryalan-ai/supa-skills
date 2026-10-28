@@ -140,7 +140,7 @@ def main() -> int:
     if args.panel:
         panel = json.loads(Path(args.panel).expanduser().read_text())
         data["panel"] = panel
-        for key in ("verdict", "lede"):
+        for key in ("verdict", "lede", "compareBanner", "compareWarning"):
             if panel.get("report", {}).get(key):
                 data[key] = panel["report"][key]
         drop = set(panel.get("report", {}).get("dropFindings", []))

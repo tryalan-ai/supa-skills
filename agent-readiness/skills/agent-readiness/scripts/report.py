@@ -21,6 +21,7 @@ PALETTE = ["#4f46e5", "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#6
 ARCHETYPE_COLOR = {
     "Verified delivery": "#10b981",
     "Delivered (reported in chat)": "#34d399",
+    "Verified nothing needed changing": "#6ee7b7",
     "Unverified change": "#f59e0b",
     "Blocked by environment or missing context": "#ef4444",
     "Stuck in failure loops": "#dc2626",
@@ -281,12 +282,14 @@ def model_table(agg: dict) -> str:
 COMPARE_METRICS: list[tuple[str, str, bool, str]] = [
     ("Code changes verified after the final edit", "verification.validatedAfterLastEdit", True, "%"),
     ("Sessions blocked", "_blocked", False, "%"),
-    ("Tool calls that fail", "failures.failureRate", False, "%"),
-    ("Verification commands that follow AGENTS.md", "_adherence", True, "%"),
-    ("Sessions that opened the agent instructions", "_docread", True, "%"),
     ("Sessions with side effects outside the diff", "risks.sessionShare", False, "%"),
-    ("Undisclosed side effects", "risks.undisclosed", False, ""),
+    ("Sessions that opened the agent instructions", "_docread", True, "%"),
+    ("Undisclosed high-risk side effects", "risks.undisclosed", False, ""),
+    ("Tool calls that fail", "failures.failureRate", False, "% of calls"),
+    ("Verification commands that follow AGENTS.md", "_adherence", True, "% of calls"),
     ("Median tool calls per session", "workflow.medianToolCalls", False, ""),
+    ("Median session minutes", "workflow.medianDurationMin", False, ""),
+    ("Friction cost, minutes per session (illustrative)", "_cost", False, ""),
     ("Agent operations score", "_ops", True, ""),
     ("Repository readiness score", "_repo", True, ""),
 ]
@@ -302,6 +305,8 @@ def metric_value(data: dict, key: str) -> float | None:
         return (data.get("adherence") or {}).get("documentedShare")
     if key == "_docread":
         return (data.get("instructionReach") or {}).get("agentDocReadRate")
+    if key == "_cost":
+        return (data.get("cost") or {}).get("minutesPerSession")
     if key == "_ops":
         return (data.get("ops") or {}).get("score")
     if key == "_repo":
@@ -312,25 +317,90 @@ def metric_value(data: dict, key: str) -> float | None:
     return node if isinstance(node, (int, float)) else None
 
 
+def fisher_p(a: int, n1: int, c: int, n2: int) -> float:
+    """Two-sided Fisher exact p-value for a/n1 versus c/n2."""
+    total, hits = n1 + n2, a + c
+    def prob(x: int) -> float:
+        return math.comb(hits, x) * math.comb(total - hits, n1 - x) / math.comb(total, n1)
+    observed = prob(a)
+    return min(1.0, sum(prob(x) for x in range(max(0, hits - n2), min(hits, n1) + 1) if prob(x) <= observed * (1 + 1e-9)))
+
+
+def metric_counts(d: dict, key: str) -> tuple[int, int] | None:
+    agg = d["behavior"]
+    if key == "verification.validatedAfterLastEdit":
+        editing = [x for x in d["sessions"] if x["has_tool_data"] and x["category_counts"].get("edit") and not x.get("reverted")]
+        return sum(1 for x in editing if x["validated_after_last_edit"]), len(editing)
+    if key == "risks.sessionShare":
+        return agg["risks"]["sessionsWithRisk"], agg["toolSessionCount"]
+    if key == "failures.failureRate":
+        return agg["failures"]["failedCalls"], agg["toolCalls"]
+    if key == "_blocked":
+        return agg["archetypes"].get("Blocked by environment or missing context", 0) + agg["archetypes"].get("Stuck in failure loops", 0), agg["toolSessionCount"]
+    if key == "_docread":
+        tool = [x for x in d["sessions"] if x["has_tool_data"]]
+        return sum(1 for x in tool if x.get("read_agent_doc")), len(tool)
+    return None
+
+
+def count_label(base: dict, data: dict, key: str) -> str:
+    def counts(d: dict) -> str:
+        agg = d["behavior"]
+        if key == "verification.validatedAfterLastEdit":
+            editing = [x for x in d["sessions"] if x["has_tool_data"] and x["category_counts"].get("edit") and not x.get("reverted")]
+            return f"{sum(1 for x in editing if x['validated_after_last_edit'])}/{len(editing)}"
+        if key == "risks.sessionShare":
+            return f"{agg['risks']['sessionsWithRisk']}/{agg['toolSessionCount']}"
+        if key == "failures.failureRate":
+            return f"{agg['failures']['failedCalls']}/{agg['toolCalls']}"
+        if key == "_blocked":
+            blocked = agg["archetypes"].get("Blocked by environment or missing context", 0) + agg["archetypes"].get("Stuck in failure loops", 0)
+            return f"{blocked}/{agg['toolSessionCount']}"
+        return ""
+    before, after = counts(base), counts(data)
+    return f' <span class="noise">{before} → {after}</span>' if before else ""
+
+
+def model_rows_compare(base: dict, data: dict) -> str:
+    before = {r["model"]: r for r in base["behavior"].get("byModel", [])}
+    rows = []
+    for r in data["behavior"].get("byModel", []):
+        b = before.get(r["model"])
+        if not b or b["verified"] is None or r["verified"] is None:
+            continue
+        rows.append(f'<tr><td>Verified changes · {e(r["model"].replace("claude-", ""))}</td><td class=num>{round(b["verified"])}%</td><td class=num><b>{round(r["verified"])}%</b></td><td class="num muted">{"▲" if r["verified"] > b["verified"] else "▼" if r["verified"] < b["verified"] else "＝"} {abs(round(r["verified"] - b["verified"]))} pts <span class="noise">n={r["sessions"]}</span></td></tr>')
+    return "".join(rows)
+
+
 def comparison(data: dict) -> str:
     base = data.get("baseline")
     if not base:
         return ""
     rows = []
+    n = max(1, min(base["behavior"].get("toolSessionCount", 0) or 1, data["behavior"].get("toolSessionCount", 0) or 1))
+    noise = 150 / n
     for label, key, higher_better, unit in COMPARE_METRICS:
         before, after = metric_value(base, key), metric_value(data, key)
         if before is None or after is None:
             continue
         delta = after - before
-        good = (delta > 0) == higher_better if delta else None
+        before_counts, after_counts = metric_counts(base, key), metric_counts(data, key)
+        p_value = fisher_p(before_counts[0], before_counts[1], after_counts[0], after_counts[1]) if before_counts and after_counts and before_counts[1] and after_counts[1] else None
+        within_noise = (p_value is not None and p_value > 0.1) or (p_value is None and unit == "%" and abs(delta) < noise)
+        good = None if not delta or within_noise else (delta > 0) == higher_better
         tone = "good" if good else "bad" if good is False else "muted"
         arrow = "▲" if delta > 0 else "▼" if delta < 0 else "＝"
-        rows.append(f'<tr><td>{e(label)}</td><td class=num>{round(before)}{unit}</td><td class=num><b>{round(after)}{unit}</b></td><td class="num {tone}">{arrow} {abs(round(delta))}{unit}</td></tr>')
+        size = f"{abs(round(delta))} pts" if unit.startswith("%") else f"{abs(round(delta))}"
+        unit = "%" if unit.startswith("%") else unit
+        note = f'<span class="noise">within noise{f" (p={p_value:.2f})" if p_value is not None else ""}</span>' if within_noise and delta else (f'<span class="noise">p={p_value:.2f}</span>' if p_value is not None and delta else "")
+        counts = count_label(base, data, key)
+        rows.append(f'<tr><td>{e(label)}{counts}</td><td class=num>{round(before)}{unit}</td><td class=num><b>{round(after)}{unit}</b></td><td class="num {tone}">{arrow} {size} {note}</td></tr>')
     changes = "".join(f"<li>{md_code(c)}</li>" for c in data.get("baselineChanges", []))
-    return f'''<section id="change"><div class="card change"><p class="eyebrow">Measured change</p><h3>Same {base["behavior"].get("toolSessionCount", 0)} requests, before and after the day-one fixes</h3>
-<p class="muted">Baseline: {e(base.get("label", "before"))} · After: {e(data.get("label", "after"))}. Same prompts, same models, fresh isolated workspaces.</p>
+    return f'''<section id="change"><div class="card change"><p class="eyebrow">Measured change</p>{f'<div class="callout-warn lead">{md_code(data["compareBanner"])}</div>' if data.get("compareBanner") else ""}<h3>Same {base["behavior"].get("toolSessionCount", 0)} requests, before and after the day-one fixes</h3>
+<p class="muted">Before: {e(base.get("label", "baseline"))} · After: {e(data.get("label", "after"))}. Same prompts, same models, fresh isolated workspaces.</p>
 {f"<h4>What changed in the repository</h4><ul>{changes}</ul>" if changes else ""}
-<table class="mini compare"><thead><tr><th>Metric</th><th class=num>Before</th><th class=num>After</th><th class=num>Change</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>'''
+<p class="muted small">With {base["behavior"].get("toolSessionCount", 0)} sessions per run, one session moves a session-level percentage by about {round(100 / max(1, base["behavior"].get("toolSessionCount", 1)))} points; count-based rows are tested with a two-sided Fisher exact test and marked as noise when p &gt; 0.1.</p>
+<table class="mini compare"><thead><tr><th>Metric</th><th class=num>Before</th><th class=num>After</th><th class=num>Change</th></tr></thead><tbody>{"".join(rows)}{model_rows_compare(base, data)}</tbody></table>{f'<div class="callout-warn">{md_code(data["compareWarning"])}</div>' if data.get("compareWarning") else ""}</div></section>'''
 
 
 def proof_plan(data: dict) -> str:
@@ -476,12 +546,12 @@ def render(data: dict) -> str:
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Agent Readiness Assessment — {e(org)}</title><style>{CSS}</style></head><body>
 <header class="top"><div class="brand"><span class="logo">A</span><div><b>Agent Readiness Assessment</b><span>{e(org)} · {e(data["generatedAt"])}</span></div></div><span class="conf">Confidential · generated locally, no code left this machine</span></header>
-<nav class="toc"><a href="#summary">Summary</a>{'<a href="#change">Measured change</a>' if data.get("baseline") else ''}<a href="#ladder">Readiness ladder</a><a href="#behavior">How agents work</a><a href="#findings">Findings</a><a href="#panel">Expert panel</a><a href="#roadmap">Roadmap</a><a href="#proof">30-day plan</a><a href="#scorecard">Scorecard</a><a href="#sessions">Sessions</a><a href="#method">Method</a></nav>
+<nav class="toc"><a href="#summary">Summary</a>{'<a href="#change">Measured change</a>' if data.get("baseline") else ''}<a href="#ladder">Readiness ladder</a><a href="#behavior">How agents work</a><a href="#findings">Findings</a>{'<a href="#panel">Expert panel</a>' if data.get("panel") else ''}<a href="#roadmap">Roadmap</a><a href="#proof">30-day plan</a><a href="#scorecard">Scorecard</a><a href="#sessions">Sessions</a><a href="#method">Method</a></nav>
 <main>
 <section id="summary" class="hero">
 <div class="hero-left"><p class="eyebrow">Executive summary</p><h1>{verdict}</h1><p class="lede">{e(data.get("lede") or LEVEL_MEANING.get(practice if practice is not None else paper, ""))}</p>
 {f'<p class="confidence-line">{md_code(data["caveats"][0])}</p>' if data.get("caveats") else ""}<div class="stats">{stat(str(len(data["repos"])), "repositories scanned")}{stat(f"{agg.get('sessionCount', 0):,}", "agent sessions analyzed")}{stat(f"{agg.get('toolCalls', 0):,}", "tool calls inspected")}{stat(str(len(models) or len(agg.get('providers', {}))), "models / harnesses")}</div></div>
-<div class="hero-right">{gauge(paper, "On paper", f"Repository score {scan['score']}/100", "#4f46e5")}{gauge(practice, "In practice", practice_sub(data), "#f59e0b")}{gauge(proj_final["level"] if proj_final else None, "After the 90-day plan", f"Repository score {proj_final['score'] if proj_final else 'n/a'}/100", "#10b981")}</div>
+<div class="hero-right">{gauge(paper, "On paper", f"Repository score {scan['score']}/100", "#4f46e5")}{gauge(practice, "In practice", practice_sub(data), "#f59e0b")}<div class="projected">{gauge(proj_final["level"] if proj_final else None, "Projected", f"if the 90-day plan lands · repo {proj_final['score'] if proj_final else 'n/a'}/100", "#10b981")}</div></div>
 </section>
 <section class="topfindings"><h2>The three things to fix first</h2><div class="topgrid">{top_cards}</div></section>
 {cost_html}
@@ -507,14 +577,14 @@ def render(data: dict) -> str:
 </section>
 
 <section id="findings"><h2>Findings</h2><p class="sub">Each finding links what agents did to the repository gap that causes it, what it costs, and the fix.</p>{findings_html}</section>
-<section id="panel"><h2>Expert panel review</h2>{'<p class="sub">Four independent reviewers recomputed the numbers from raw transcripts and challenged every finding before this report was finalized.</p>' if panel else ''}{panel_section(panel)}</section>
+{f'<section id="panel"><h2>Expert panel review</h2><p class="sub">Independent reviewers recomputed the numbers from raw transcripts and challenged every finding, in two rounds, before this report was finalized.</p>{panel_section(panel)}</section>' if panel else ''}
 <section id="roadmap"><h2>90-day roadmap</h2><p class="sub">Sequenced so each phase unblocks the next. Repository levels are recomputed from the criteria each phase fixes.</p>{roadmap(findings, proj)}</section>
 <section id="proof">{proof_plan(data)}</section>
 <section id="scorecard"><h2>Repository scorecard · {e(scan["name"])}</h2><p class="sub">{scan["stats"]["sourceFiles"]:,} source files · {scan["stats"]["testFiles"]:,} test files · {", ".join(f"{k} {v:,}" for k, v in scan["stats"]["languages"].items())}</p>{scorecard(scan)}</section>
 <section id="sessions"><h2>Session explorer</h2>{session_table(sessions)}</section>
 <section id="method"><h2>Methodology</h2><div class="grid2"><div class="card"><h3>Data sources</h3><ul>{method_sources}<li>Harnesses: {e(provider_list)}</li><li>Repository: {e(scan["path"])}</li></ul>
 <h3>Privacy</h3><p>Everything runs locally. Transcripts are parsed on this machine; excerpts are redacted for keys, tokens and passwords, and capped at 220 characters.</p></div>
-<div class="card"><h3>How scores work</h3><ul><li><b>On paper</b>: repository level from {len(scan["criteria"])} pass/fail criteria with file-level evidence; 80% gating per level.</li><li><b>In practice</b>: agent operations score from verified delivery (30%), unblocked sessions (20%), tool reliability (15%), request quality (15%), grounded edits (10%) and low rework (10%), mapped to the same five levels.</li><li><b>Verified</b> means a test, type check or build passed after the session's final edit. Lint alone does not count.</li></ul>
+<div class="card"><h3>How scores work</h3><ul><li><b>On paper</b>: repository level from {len(scan["criteria"])} pass/fail criteria with file-level evidence; 80% gating per level.</li><li><b>In practice</b>: agent operations score from verified delivery (25%), unblocked sessions (15%), safe operation — sessions without high-risk side effects (15%), tool reliability (15%), request quality (15%), grounded edits (5%) and low rework (10%), mapped to the same five levels.</li><li><b>Verified</b> means a test, type check or build passed after the session's final edit. Lint alone does not count.</li></ul>
 {f"<h3>Caveats</h3><ul>{caveats}</ul>" if caveats else ""}</div></div></section>
 </main><footer>Generated by the agent-readiness skill · {e(data["generatedAt"])}</footer>
 <script type="application/json" id="report-data">{html.escape(json.dumps({"findings": [f["id"] for f in findings]}))}</script></body></html>'''
@@ -546,7 +616,9 @@ h3{font-size:16px;margin:0 0 12px}h4{font-size:12px;text-transform:uppercase;let
 .confidence-line{font-size:12.5px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:6px 10px;margin:0 0 14px}
 .alan-line{font-size:13px;margin:0}li.ctx{color:var(--mute)}b.bad,.bad{color:#dc2626}td.good{color:#059669;font-weight:700}td.bad{color:#dc2626;font-weight:700}
 .risk{border-color:#fecaca}.tablewrap.flat{border:0;border-radius:0}
-.change{border:2px solid #10b981}.change h3{font-size:22px}.compare td{font-size:14px;padding:9px 6px}
+.projected{opacity:.75;border-left:1px dashed var(--line);padding-left:10px}.projected .gauge-label::after{content:" (projection)";font-weight:400;color:var(--mute);font-size:12px}
+.callout-warn{font-size:13px;background:#fff7ed;border:1px solid #fdba74;color:#7c2d12;border-radius:10px;padding:10px 12px;margin:12px 0 0}.callout-warn.lead{margin:0 0 12px}
+.noise{font-size:11px;font-weight:500;color:var(--mute);margin-left:4px}.change{border:2px solid #10b981}.change h3{font-size:22px}.compare td{font-size:14px;padding:9px 6px}
 .cost{margin-top:16px;border-color:#fecaca}.small{font-size:12px}.muted{color:var(--mute)}
 .ladder-wrap{display:grid;grid-template-columns:1.5fr 1fr;gap:16px;align-items:start}.ladder{width:100%;border-collapse:separate;border-spacing:4px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px}
 .ladder th{font-size:12px;font-weight:700;text-align:center}.ladder th span{display:block;font-weight:500;color:var(--mute);font-size:10.5px}.ladder .rowh{text-align:left;font-size:13px;font-weight:600;white-space:nowrap;padding-right:6px}

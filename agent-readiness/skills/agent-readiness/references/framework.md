@@ -11,8 +11,8 @@ The framework puts both lenses on one five-level scale. The gap between them tel
 
 ```mermaid
 flowchart LR
-  R["Repository scan<br/>64 criteria, 10 pillars"] --> P["On-paper level L0–L5"]
-  S["Session transcripts<br/>Claude Code, Codex, Cursor, Droid, Gemini, Copilot, Alan"] --> B["Behavioral metrics<br/>6 dimensions"]
+  R["Repository scan<br/>66 criteria, 10 pillars"] --> P["On-paper level L0–L5"]
+  S["Session transcripts<br/>Claude Code, Codex, Cursor, Droid, Gemini, Copilot, Alan"] --> B["Behavioral metrics<br/>7 dimensions"]
   B --> O["Agent operations score 0–100"] --> Q["In-practice level L0–L5"]
   P --> F["Findings<br/>symptom + root cause + cost + fix"]
   B --> F
@@ -33,7 +33,7 @@ flowchart LR
 
 ## Lens 1: on paper (repository scan)
 
-There are 64 pass/fail criteria. Each one records the file, script or configuration that proves its result. A criterion is **skipped** rather than failed when the checkout cannot measure it, for example when git history is missing from a shallow clone.
+There are 66 pass/fail criteria. Each one records the file, script or configuration that proves its result. A criterion is **skipped** rather than failed when the checkout cannot measure it, for example when git history is missing from a shallow clone.
 
 **Gating:** a level is reached when at least 80% of its criteria pass **and every lower level passes**. This stops a repository from collecting easy wins at L4 while L2 is still broken.
 
@@ -70,16 +70,17 @@ Transcripts are parsed locally into provider-neutral events: user prompts, assis
 - skill
 - deliver (commit or PR)
 
-### The six behavioral dimensions
+### The seven behavioral dimensions
 
 | Dimension | Question | Key metrics |
 |---|---|---|
 | **1. Codebase exploration** | How do agents study the codebase? | Tool calls and files read before the first edit · share of calls spent reading and searching · search-to-read ratio · code-index use · **blind edits** (modifying a file never opened in the session) · re-read churn · whether the agent opened the instruction file |
 | **2. Workflow shape** | What path does work take from request to change? | Funnel: request → explored → changed → verified → delivered · session outcome mix · plan, sub-agent, skill and MCP use · longest autonomous run |
 | **3. Verification discipline** | Do agents prove their work? | Share of code-changing sessions where a test, type check or build **passed after the final edit** (lint alone does not count) · depth distribution · completion claims without verification |
-| **4. Failure & recovery** | Where do agents get stuck? | Tool failure rate · failure taxonomy (missing dependency, service down, environment configuration, authentication, sandbox permission, timeout, type errors, test failures, wrong path, edit mismatch, network, git state, tool schema) · repeated identical failing commands · sessions ending on a failure |
-| **5. Human-agent collaboration** | How do developers direct agents? | Who starts the work (typed by a developer, relayed from Slack or Teams, a workflow or orchestrator, a schedule) · first-prompt specificity (files, acceptance criteria, reproduction, verification step, ticket link) · request quality against outcome · corrections, interruptions, single-shot rate |
-| **6. Instruction adherence** | Do agents follow the rules the team already wrote? | **Instruction reach:** does each harness in use load an instruction file? (Claude Code reads `CLAUDE.md`, not `AGENTS.md`) · share of verification commands that match documented commands · violations of written "never" rules found in commands and edit content |
+| **4. Side effects & disclosure** | What do agents do that the diff does not show? | High-risk actions per session (containers and databases started, shared dependencies or generated code changed, git history rewritten, hooks bypassed, data queried, secrets read, writes into other checkouts) · whether the agent's final report disclosed each one · lower-risk scratch writes counted separately |
+| **5. Failure & recovery** | Where do agents get stuck? | Tool failure rate · failure taxonomy (missing dependency, service down, environment configuration, authentication, sandbox permission, timeout, type errors, test failures, wrong path, edit mismatch, network, git state, tool schema) · repeated identical failing commands · sessions ending on a failure |
+| **6. Human-agent collaboration** | How do developers direct agents? | Who starts the work (typed by a developer, relayed from Slack or Teams, a workflow or orchestrator, a schedule) · first-prompt specificity (files, acceptance criteria, reproduction, verification step, ticket link) · request quality against outcome · corrections, interruptions, single-shot rate |
+| **7. Instruction adherence** | Do agents follow the rules the team already wrote? | **Instruction reach:** does each harness in use load an instruction file? (Claude Code reads `CLAUDE.md`, not `AGENTS.md`) · share of verification commands that match documented commands · violations of written "never" rules found in commands and edit content |
 
 ### Session outcomes
 
@@ -98,11 +99,12 @@ Each session is classified into one outcome:
 
 | Component | Weight | Computed as |
 |---|---|---|
-| Verified delivery | 30% | % of code-changing sessions verified after the final edit |
-| Unblocked sessions | 20% | 100 − % of sessions that were blocked or stuck |
+| Verified delivery | 25% | % of code-changing sessions verified after the final edit |
+| Unblocked sessions | 15% | 100 − % of sessions that were blocked or stuck |
+| Safe operation | 15% | 100 − % of sessions with a high-risk side effect (containers or databases started, shared state changed, history rewritten, hooks bypassed, data queried, writes into other checkouts) |
 | Tool reliability | 15% | 100 − 4 × tool failure rate |
 | Request quality | 15% | 100 − % of vague first prompts |
-| Grounded edits | 10% | 100 − % of code-changing sessions with blind edits |
+| Grounded edits | 5% | 100 − % of code-changing sessions with blind edits |
 | Low rework | 10% | 100 − 2 × % of sessions needing a correction |
 
 The score maps to a level: L1 at 25 or above, L2 at 45, L3 at 65, L4 at 80 and L5 at 90.
@@ -153,7 +155,7 @@ A moderator then reconciles the reviews. Confirmed analyzer bugs are fixed in co
 
 | | File-based scorecards | This framework |
 |---|---|---|
-| Measures repository structure | Yes | Yes (64 criteria, 80% gating) |
+| Measures repository structure | Yes | Yes (66 criteria, 80% gating) |
 | Measures what agents actually do | No | Yes: exploration, verification, failures, adherence |
 | Measures how developers direct agents | No | Yes: who starts the work, request quality against outcome, corrections |
 | Checks that instructions reach every harness | No | Yes |

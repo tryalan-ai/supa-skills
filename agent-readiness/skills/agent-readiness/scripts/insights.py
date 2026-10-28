@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import json
 import re
+import statistics
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from behavior import SessionMetrics
+from behavior import SessionMetrics, segment_category, shell_segments
 
 def n(value: float) -> str:
     """Whole numbers in prose: 7.0 -> 7, 55.5 -> 56."""
@@ -142,16 +143,26 @@ WRAPPERS = re.compile(r"^\s*(\(?\s*cd [^&;]+(&&|;)\s*|timeout\s+(-\S+\s+)*\d+[sm
 
 
 def command_core(command: str) -> str:
-    command = command.split("\n")[0]
-    command = re.split(r"\s+(\||2>&1|>|&&|;)\s*", command)[0]
-    command = WRAPPERS.sub("", command)
-    return re.sub(r"\s+", " ", command).strip()
+    segments = shell_segments(command)
+    core = next((seg for seg in segments if segment_category(seg) == "validate"), segments[0] if segments else "")
+    core = WRAPPERS.sub("", core)
+    return re.sub(r"\s+", " ", core).strip()
+
+
+def head(core: str) -> str:
+    """Match key for a command: `vitest run`, `tsc --noEmit`, or `npm run lint` for package-manager scripts."""
+    tokens = core.split()
+    if len(tokens) >= 3 and tokens[0] in ("npm", "pnpm", "yarn", "bun") and tokens[1] == "run":
+        return " ".join(tokens[:3])
+    if len(tokens) >= 2 and tokens[0] in ("npm", "pnpm", "yarn", "bun") and tokens[1] in ("test", "t"):
+        return f"{tokens[0]} run test"
+    return " ".join(tokens[:2])
 
 
 def documented_heads(repo: Path, documented: list[str]) -> set[str]:
     """Two-token heads of documented commands, with `npm run x` expanded to the script it runs."""
     scripts: dict[str, str] = {}
-    for manifest in [repo / "package.json", *repo.glob("*/*/package.json")]:
+    for manifest in [*repo.glob("*/*/package.json"), repo / "package.json"]:
         try:
             scripts.update({k: str(v) for k, v in (json.loads(manifest.read_text()).get("scripts") or {}).items()})
         except (OSError, json.JSONDecodeError):
@@ -159,11 +170,11 @@ def documented_heads(repo: Path, documented: list[str]) -> set[str]:
     heads: set[str] = set()
     for doc in documented:
         core = command_core(doc)
-        heads.add(" ".join(core.split()[:2]))
+        heads.add(head(core))
         run = re.match(r"(?:npm|pnpm|yarn|bun) (?:run )?([\w:.-]+)", core)
         if run and run.group(1) in scripts:
             body = command_core(scripts[run.group(1)].split("&&")[-1])
-            heads.add(" ".join(body.split()[:2]))
+            heads.add(head(body))
     return {h for h in heads if h}
 
 
@@ -180,14 +191,26 @@ def adherence(sessions: list[SessionMetrics], repo: Path) -> dict:
             core = command_core(call["command"])
             if not core:
                 continue
-            if call["category"] == "validate":
-                head = " ".join(core.split()[:2])
-                matched = head in doc_heads or any(core.startswith(d) for d in doc_heads)
+            if call["category"] == "validate" or (call["category"] == "edit" and segment_category(core) == "validate"):
+                matched = head(core) in doc_heads
                 validation_calls.append({"session": s.id, "command": core[:140], "documented": matched})
             for rule in forbidden:
                 if rule in core:
                     violations.append({"session": s.id, "rule": f"Do not run `{rule}`", "command": core[:140]})
 
+    rule_text = " ".join(open(repo / f, errors="ignore").read() for f in ("AGENTS.md", "CLAUDE.md") if (repo / f).exists()).lower()
+    written = {
+        "infrastructure": r"do not start (databases|containers|services)|don't start (databases|containers)",
+        "data_access": r"do not (start databases[^.]*)?query databases|do not query databases|not query databases directly",
+        "history_rewrite": r"do not rewrite git history|no `git commit --amend`",
+        "outside_workspace": r"work only inside this checkout|do not write to other directories",
+        "hook_bypass": r"--no-verify|do not (skip|bypass) (hooks|checks)",
+    }
+    for s in sessions:
+        for risk in s.risks:
+            pattern = written.get(risk["kind"])
+            if pattern and re.search(pattern, rule_text):
+                violations.append({"session": s.id, "rule": f"Written rule: {risk['label'].lower()} is not allowed", "command": risk["command"][:140]})
     used = sum(1 for v in validation_calls if v["documented"])
     undocumented = Counter_top([v["command"] for v in validation_calls if not v["documented"]])
     return {
@@ -196,7 +219,7 @@ def adherence(sessions: list[SessionMetrics], repo: Path) -> dict:
         "validationCalls": len(validation_calls),
         "documentedShare": round(100 * used / len(validation_calls), 1) if validation_calls else None,
         "undocumentedTop": undocumented,
-        "violations": violations[:12],
+        "violations": violations[:20],
     }
 
 
@@ -225,6 +248,18 @@ def pick_excerpts(sessions: list[SessionMetrics], kind: str, n: int = 3, match: 
 
 def build_findings(scan: dict, agg: dict, sessions: list[SessionMetrics], adhere: dict, reach: dict | None = None) -> list[Finding]:
     findings: list[Finding] = []
+    quality = agg.get("dataQuality", {})
+    if not (reach or {}).get("gaps") and quality.get("launchedOutsideRepo") and any(s.provider == "claude_cli" for s in sessions):
+        findings.append(Finding(
+            "instruction-reach", "medium",
+            "Instruction loading is fixed on disk but not yet observed",
+            f"The repository now has an instruction file for every harness in use, but {quality['launchedOutsideRepo']} of {len(sessions)} sessions were launched from outside the repository, so none of them loaded it automatically. Agents opened AGENTS.md themselves in {n((reach or {}).get('agentDocReadRate', 0))}% of sessions.",
+            f"0/{quality['launchedOutsideRepo']} sessions loaded this repo's CLAUDE.md automatically",
+            root_causes=passing(scan, "ctx.multi"),
+            impact="Until a session launched inside the repository shows the file in its context, the fix is a plausible improvement, not a measured one.",
+            fix=["Launch agents from the repository root (or each worktree) and re-run this assessment."],
+            playbook="context", effort="S", horizon="30",
+        ))
     for gap in (reach or {}).get("gaps", []):
         findings.append(Finding(
             "instruction-reach", "critical",
@@ -255,7 +290,7 @@ def build_findings(scan: dict, agg: dict, sessions: list[SessionMetrics], adhere
         env_blocked = reasons["environment"]
         share = round(100 * len(env_blocked) / n_tool)
         findings.append(Finding(
-            "env-blockers", "critical" if share >= 15 else "high",
+            "env-blockers", "critical" if share >= 15 and len(env_blocked) >= 2 else "high" if len(env_blocked) >= 2 else "medium",
             "Agents cannot run what they change",
             f"{len(env_blocked)} of {n_tool} sessions ({share}%) stopped because the agent could not start a database, service or generated client it needed" + (f"; {len(reasons['context'])} more stopped for missing context" if reasons["context"] else "") + ".",
             f"{len(env_blocked)}/{n_tool} sessions blocked by environment · {env_fail} environment-class tool failures",
@@ -300,16 +335,16 @@ def build_findings(scan: dict, agg: dict, sessions: list[SessionMetrics], adhere
     if editing:
         verified = sum(1 for s in editing if s.validated_after_last_edit)
         checked_failing = sum(1 for s in editing if s.checked_after_last_edit and not s.validated_after_last_edit)
-        lint_only = sum(1 for s in editing if s.verification_depth == "lint" and not s.checked_after_last_edit)
-        none = sum(1 for s in editing if s.verification_depth == "none" and not s.checked_after_last_edit)
+        lint_only = sum(1 for s in editing if not s.validated_after_last_edit and not s.checked_after_last_edit and s.verification_depth == "lint")
+        none = sum(1 for s in editing if not s.validated_after_last_edit and not s.checked_after_last_edit and s.verification_depth != "lint")
         rate = round(100 * verified / len(editing))
         if rate < 85:
             findings.append(Finding(
                 "verification-gap", "critical" if rate < 50 else "high",
                 "Changes are handed back without proof they work",
                 f"Only {verified} of {len(editing)} code-changing sessions ({rate}%) had a test, type check or build pass after their final edit. {checked_failing} ran a check that failed or could not run, {lint_only} relied on lint alone and {none} ran nothing.",
-                f"{rate}% verified after final edit · {lint_only} lint-only · {none} unverified",
-                evidence=[{"session": s.id, "prompt": s.first_prompt[:140], "text": f"Edited {s.distinct_files_edited} file(s); verification: {s.verification_depth}"} for s in editing if not s.validated_after_last_edit][:4],
+                f"{verified}/{len(editing)} verified after the final edit · {checked_failing} check failed · {lint_only} lint only · {none} no check",
+                evidence=[{"session": s.id, "prompt": s.first_prompt[:140], "text": f"Edited {s.distinct_files_edited} file(s); " + ("a check ran after the final edit but did not pass" if s.checked_after_last_edit else "lint only after the final edit" if s.verification_depth == "lint" else "no check after the final edit")} for s in editing if not s.validated_after_last_edit][:4],
                 root_causes=failing(scan, "env.codegen", "ver.focused", "ctx.commands", "ver.command", "ver.typecheck", "ver.e2e", "guard.precommit"),
                 impact="Unverified agent output moves the testing burden to reviewers, which is where agent productivity gains are lost.",
                 fix=["Document one fast, focused test command per package in AGENTS.md.",
@@ -471,12 +506,14 @@ def ops_score(agg: dict) -> dict:
     e = agg["exploration"]
     tool = agg["toolSessionCount"]
     blocked = agg["archetypes"].get("Blocked by environment or missing context", 0) + agg["archetypes"].get("Stuck in failure loops", 0)
+    risk_share = agg.get("risks", {}).get("sessionShare", 0)
     components = [
-        ("Verified delivery", v["validatedAfterLastEdit"] if v["editSessions"] else 50, 0.3),
-        ("Unblocked sessions", 100 - 100 * blocked / max(1, tool), 0.2),
+        ("Verified delivery", v["validatedAfterLastEdit"] if v["editSessions"] else 50, 0.25),
+        ("Unblocked sessions", 100 - 100 * blocked / max(1, tool), 0.15),
+        ("Safe operation", 100 - risk_share, 0.15),
         ("Tool reliability", max(0, 100 - 4 * f["failureRate"]), 0.15),
         ("Prompt quality", 100 - h["vaguePromptRate"], 0.15),
-        ("Grounded edits", 100 - e["editSessionsWithBlindEdits"], 0.1),
+        ("Grounded edits", 100 - e["editSessionsWithBlindEdits"], 0.05),
         ("Low rework", max(0, 100 - 2 * h["sessionsWithCorrections"]), 0.1),
     ]
     score = round(sum(value * weight for _, value, weight in components))
@@ -497,7 +534,7 @@ def cost_model(agg: dict, sessions: list[SessionMetrics], developers: int, sessi
     if not tool:
         return {}
     durations = [s.duration_min for s in tool if s.duration_min]
-    median_min = sorted(durations)[len(durations) // 2] if durations else 8.0
+    median_min = statistics.median(durations) if durations else 8.0
     blocked = sum(1 for s in tool if s.archetype in ("blocked", "struggling"))
     unverified = sum(1 for s in tool if s.archetype == "unverified_change")
     per_session = {

@@ -1,6 +1,6 @@
 ---
 name: agent-readiness
-description: Assess how ready a codebase and its team are for autonomous coding agents. It scores the repository on 64 criteria and analyzes real agent session transcripts from Claude Code, Codex, Cursor, Droid, Gemini, Copilot and Alan to measure how agents study the codebase, verify their work, fail and follow instructions, and how developers direct them. An expert panel reviews the findings before the report is delivered. Use when asked for an agent readiness report, assessment, audit or scorecard, or to analyze how a team uses agents. Do not use for a single code review or for fixing one bug.
+description: Assess how ready a codebase and its team are for autonomous coding agents. It scores the repository on 66 criteria and analyzes real agent session transcripts from Claude Code, Codex, Cursor, Droid, Gemini, Copilot and Alan to measure how agents study the codebase, verify their work, fail and follow instructions, and how developers direct them. An expert panel reviews the findings before the report is delivered. Use when asked for an agent readiness report, assessment, audit or scorecard, or to analyze how a team uses agents. Do not use for a single code review or for fixing one bug.
 ---
 
 # Agent Readiness Assessment
@@ -59,7 +59,24 @@ Follow `references/panel.md`. In short:
 
 If sub-agents are not available, do the four reviews yourself in sequence, one role at a time, and say so in the panel verdict.
 
-## 3. Deliver
+## 3. Measure a fix (before and after)
+
+To prove a remediation worked, run the same requests before and after it, then compare:
+
+```bash
+python3 scripts/run_readiness_check.py --repo <after checkout> --sessions <after transcripts> \
+  --baseline /tmp/agent-readiness-before/assessment.json \
+  --change 'Added `CLAUDE.md` containing `@AGENTS.md`' --label "after day-one fixes" --out /tmp/agent-readiness-after
+```
+
+The report adds a "Measured change" section. Count-based rows are tested with a Fisher exact test and marked as noise when p > 0.1. Keep the runs comparable:
+
+- same requests and models;
+- fresh, isolated checkouts with their own dependencies and databases;
+- runs that do not overlap on one machine;
+- agents launched from inside each checkout. The report warns when sessions were launched elsewhere, because the launch directory's instruction files are what the agent loads.
+
+## 4. Deliver
 
 - **In Alan:** attach `report.html` as a document artifact (`create_document_artifact`). Post a short summary to the conversation: the on-paper and in-practice levels, the top three findings, and the 30-day targets.
 - **Otherwise:** share the path to `report.html` and paste that same summary.
@@ -68,6 +85,14 @@ If sub-agents are not available, do the four reviews yourself in sequence, one r
   - the three findings to fix first;
   - the cost estimate, with its stated assumptions;
   - the 30-day plan measured by the same report.
+
+## Example
+
+`examples/` holds a complete demonstration on the open-source Documenso repository:
+
+- `documenso-baseline.html`: the diagnosis, from 12 sessions on `main`.
+- `documenso-after-fixes.html`: the re-assessment after four day-one fixes, with the measured change.
+- `panel-*.json`: the expert panel files used to render both reports.
 
 ## Interpreting the results
 
